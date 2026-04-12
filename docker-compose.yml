@@ -1,0 +1,9 @@
+services:
+  batchplant:
+    build:
+      context: .
+      dockerfile: BatchPlant/Dockerfile
+    ports:
+      - "26543:26543"
+      - "5020:5020"
+    restart: unless-stopped

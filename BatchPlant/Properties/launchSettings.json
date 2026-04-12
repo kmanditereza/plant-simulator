@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "BatchPlant": {
+      "commandName": "Project"
+    },
+    "Container (Dockerfile)": {
+      "commandName": "Docker"
+    }
+  }
+}
