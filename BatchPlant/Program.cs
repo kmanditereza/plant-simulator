@@ -49,6 +49,17 @@ namespace BatchPlant
                 TagCatalog.RegisterAll(tags);
                 Console.WriteLine($"[TAGS] Registered {tags.TagCount} tags across 8 plant areas");
 
+                // Handle --export-structure flag: dump address space to filesystem and exit
+                if (args.Contains("--export-structure"))
+                {
+                    var exportRoot = Path.Combine(
+                        AppDomain.CurrentDomain.BaseDirectory,
+                        "..", "..", "..", "..", "Objects");
+                    exportRoot = Path.GetFullPath(exportRoot);
+                    TagExporter.ExportToDirectory(tags, exportRoot);
+                    return;
+                }
+
                 // 3. Initialize and start OPC UA server
                 var server = await StartOpcUaServerAsync(tags);
                 Console.WriteLine("[OPCUA] Server started successfully");

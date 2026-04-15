@@ -3,7 +3,9 @@ services:
     build:
       context: .
       dockerfile: BatchPlant/Dockerfile
+    container_name: batchplant-v2
     ports:
       - "26543:26543"
-      - "5020:5020"
+    environment:
+      - SIM_SPEED=1
     restart: unless-stopped

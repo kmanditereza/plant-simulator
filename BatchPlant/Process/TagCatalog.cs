@@ -28,6 +28,8 @@ namespace BatchPlant.Process
             RegisterArea800(tags);
             RegisterBatchControl(tags);
             RegisterPlantStatus(tags);
+            RegisterBatchLine(tags);
+            RegisterPackLine(tags);
         }
 
         private static void RegisterArea100(TagRegistry tags)
@@ -196,6 +198,14 @@ namespace BatchPlant.Process
             tags.Define("HOMOG_401_RUN", BuiltInType.Boolean, hg, description: "Homogenizer Running");
             tags.Define("HOMOG_401_FAULT", BuiltInType.Boolean, hg, description: "Homogenizer Fault");
             tags.Define("HOMOG_401_VLV_HRS", BuiltInType.Double, hg, "hrs", "Homogenizer Valve Run Hours", 0.0);
+            // PackML state (GEA-class equipment from 2012 upgrade exposes this)
+            tags.Define("HOMOG_401_OP_STATE", BuiltInType.Int32, hg, description: "PackML Operational State (0=Disabled,1=Idle,2=Running,3=Starved,4=Blocked,5=PlannedDT,6=UnplannedDT,7=Other)", initialValue: 1);
+            tags.Define("HOMOG_401_OP_STATE_TXT", BuiltInType.String, hg, description: "PackML Operational State Text", initialValue: "Idle");
+            tags.Define("HOMOG_401_STATE_DUR", BuiltInType.Double, hg, "sec", "Time in Current State", 0.0);
+            // PackML operational mode
+            tags.Define("HOMOG_401_OP_MODE", BuiltInType.Int32, hg, description: "PackML Operational Mode (0=Disabled,1=Idle,2=Production,3=Changeover,4=Maintenance,5=Cleaning,6=Other)", initialValue: 1);
+            tags.Define("HOMOG_401_OP_MODE_TXT", BuiltInType.String, hg, description: "PackML Operational Mode Text", initialValue: "Idle");
+            tags.Define("HOMOG_401_MODE_DUR", BuiltInType.Double, hg, "sec", "Time in Current Mode", 0.0);
 
             // Transfer pump
             tags.Define("401-P-001_STS", BuiltInType.Int32, da, description: "Transfer Pump Status", initialValue: 0);
@@ -256,6 +266,14 @@ namespace BatchPlant.Process
             // PascalCase leak from Krones HMI configuration
             tags.Define("FILLER_HeadPress_01", BuiltInType.Double, fl, "bar", "Filler Head Pressure", 0.0);
             tags.Define("FL_501_PROD_TEMP", BuiltInType.Double, fl, "degC", "Product Temperature at Filler", 22.0);
+            // PackML state (Krones standard)
+            tags.Define("FL_501_OP_STATE", BuiltInType.Int32, fl, description: "PackML Operational State (0=Disabled,1=Idle,2=Running,3=Starved,4=Blocked,5=PlannedDT,6=UnplannedDT,7=Other)", initialValue: 1);
+            tags.Define("FL_501_OP_STATE_TXT", BuiltInType.String, fl, description: "PackML Operational State Text", initialValue: "Idle");
+            tags.Define("FL_501_STATE_DUR", BuiltInType.Double, fl, "sec", "Time in Current State", 0.0);
+            // PackML mode
+            tags.Define("FL_501_OP_MODE", BuiltInType.Int32, fl, description: "PackML Operational Mode (0=Disabled,1=Idle,2=Production,3=Changeover,4=Maintenance,5=Cleaning,6=Other)", initialValue: 1);
+            tags.Define("FL_501_OP_MODE_TXT", BuiltInType.String, fl, description: "PackML Operational Mode Text", initialValue: "Idle");
+            tags.Define("FL_501_MODE_DUR", BuiltInType.Double, fl, "sec", "Time in Current Mode", 0.0);
 
             // Capper CAP-501
             var cap = $"{p}/Capper_CAP501";
@@ -263,6 +281,14 @@ namespace BatchPlant.Process
             tags.Define("CAP_501_JAM", BuiltInType.Boolean, cap, description: "Cap Feeder Jam");
             tags.Define("CAP_501_TORQUE", BuiltInType.Double, cap, "in-lb", "Cap Torque", 0.0);
             tags.Define("CAP_501_CNT", BuiltInType.Int32, cap, description: "Caps Applied Count", initialValue: 0);
+            // PackML state
+            tags.Define("CAP_501_OP_STATE", BuiltInType.Int32, cap, description: "PackML Operational State", initialValue: 1);
+            tags.Define("CAP_501_OP_STATE_TXT", BuiltInType.String, cap, description: "PackML Operational State Text", initialValue: "Idle");
+            tags.Define("CAP_501_STATE_DUR", BuiltInType.Double, cap, "sec", "Time in Current State", 0.0);
+            // PackML mode
+            tags.Define("CAP_501_OP_MODE", BuiltInType.Int32, cap, description: "PackML Operational Mode", initialValue: 1);
+            tags.Define("CAP_501_OP_MODE_TXT", BuiltInType.String, cap, description: "PackML Operational Mode Text", initialValue: "Idle");
+            tags.Define("CAP_501_MODE_DUR", BuiltInType.Double, cap, "sec", "Time in Current Mode", 0.0);
 
             // Inversion Tunnel
             var inv = $"{p}/InversionTunnel";
@@ -270,6 +296,14 @@ namespace BatchPlant.Process
             tags.Define("INV_TUNNEL_TEMP_2", BuiltInType.Double, inv, "degC", "Inversion Tunnel Temp Zone 2", 22.0);
             tags.Define("INV_TUNNEL_SPD", BuiltInType.Double, inv, "m/min", "Inversion Tunnel Speed", 0.0);
             tags.Define("INV_TUNNEL_RUN", BuiltInType.Boolean, inv, description: "Inversion Tunnel Running");
+            // PackML state
+            tags.Define("INV_TUNNEL_OP_STATE", BuiltInType.Int32, inv, description: "PackML Operational State", initialValue: 1);
+            tags.Define("INV_TUNNEL_OP_STATE_TXT", BuiltInType.String, inv, description: "PackML Operational State Text", initialValue: "Idle");
+            tags.Define("INV_TUNNEL_STATE_DUR", BuiltInType.Double, inv, "sec", "Time in Current State", 0.0);
+            // PackML mode
+            tags.Define("INV_TUNNEL_OP_MODE", BuiltInType.Int32, inv, description: "PackML Operational Mode", initialValue: 1);
+            tags.Define("INV_TUNNEL_OP_MODE_TXT", BuiltInType.String, inv, description: "PackML Operational Mode Text", initialValue: "Idle");
+            tags.Define("INV_TUNNEL_MODE_DUR", BuiltInType.Double, inv, "sec", "Time in Current Mode", 0.0);
 
             // Cooling Tunnel
             var cool = $"{p}/CoolingTunnel";
@@ -279,12 +313,28 @@ namespace BatchPlant.Process
             tags.Define("COOL_TUN_SPRAY_FLOW", BuiltInType.Double, cool, "L/min", "Cooling Spray Flow", 0.0);
             tags.Define("COOL_TUN_SPRAY_TEMP", BuiltInType.Double, cool, "degC", "Cooling Spray Water Temp", 8.0);
             tags.Define("COOL_TUN_RUN", BuiltInType.Boolean, cool, description: "Cooling Tunnel Running");
+            // PackML state
+            tags.Define("COOL_TUN_OP_STATE", BuiltInType.Int32, cool, description: "PackML Operational State", initialValue: 1);
+            tags.Define("COOL_TUN_OP_STATE_TXT", BuiltInType.String, cool, description: "PackML Operational State Text", initialValue: "Idle");
+            tags.Define("COOL_TUN_STATE_DUR", BuiltInType.Double, cool, "sec", "Time in Current State", 0.0);
+            // PackML mode
+            tags.Define("COOL_TUN_OP_MODE", BuiltInType.Int32, cool, description: "PackML Operational Mode", initialValue: 1);
+            tags.Define("COOL_TUN_OP_MODE_TXT", BuiltInType.String, cool, description: "PackML Operational Mode Text", initialValue: "Idle");
+            tags.Define("COOL_TUN_MODE_DUR", BuiltInType.Double, cool, "sec", "Time in Current Mode", 0.0);
 
             // Conveyor
             var conv = $"{p}/Conveyor";
             tags.Define("CONV_501_SPD", BuiltInType.Double, conv, "BPM", "Conveyor Speed", 0.0);
             tags.Define("CONV_501_RUN", BuiltInType.Boolean, conv, description: "Conveyor Running");
             tags.Define("CONV_501_FAULT", BuiltInType.Boolean, conv, description: "Conveyor Fault/Jam");
+            // PackML state
+            tags.Define("CONV_501_OP_STATE", BuiltInType.Int32, conv, description: "PackML Operational State", initialValue: 1);
+            tags.Define("CONV_501_OP_STATE_TXT", BuiltInType.String, conv, description: "PackML Operational State Text", initialValue: "Idle");
+            tags.Define("CONV_501_STATE_DUR", BuiltInType.Double, conv, "sec", "Time in Current State", 0.0);
+            // PackML mode
+            tags.Define("CONV_501_OP_MODE", BuiltInType.Int32, conv, description: "PackML Operational Mode", initialValue: 1);
+            tags.Define("CONV_501_OP_MODE_TXT", BuiltInType.String, conv, description: "PackML Operational Mode Text", initialValue: "Idle");
+            tags.Define("CONV_501_MODE_DUR", BuiltInType.Double, conv, "sec", "Time in Current Mode", 0.0);
         }
 
         private static void RegisterArea600(TagRegistry tags)
@@ -298,19 +348,43 @@ namespace BatchPlant.Process
             tags.Define("LBL_601_SPEED", BuiltInType.Double, lbl, "BPM", "Labeler Speed", 0.0);
             tags.Define("LBL_601_REJECT", BuiltInType.Int32, lbl, description: "Labeler Reject Count", initialValue: 0);
             tags.Define("LBL_601_FAULT", BuiltInType.Boolean, lbl, description: "Labeler Fault");
+            // PackML state
+            tags.Define("LBL_601_OP_STATE", BuiltInType.Int32, lbl, description: "PackML Operational State", initialValue: 1);
+            tags.Define("LBL_601_OP_STATE_TXT", BuiltInType.String, lbl, description: "PackML Operational State Text", initialValue: "Idle");
+            tags.Define("LBL_601_STATE_DUR", BuiltInType.Double, lbl, "sec", "Time in Current State", 0.0);
+            // PackML mode
+            tags.Define("LBL_601_OP_MODE", BuiltInType.Int32, lbl, description: "PackML Operational Mode", initialValue: 1);
+            tags.Define("LBL_601_OP_MODE_TXT", BuiltInType.String, lbl, description: "PackML Operational Mode Text", initialValue: "Idle");
+            tags.Define("LBL_601_MODE_DUR", BuiltInType.Double, lbl, "sec", "Time in Current Mode", 0.0);
 
             // Date Coder (inkjet)
             var dc = $"{p}/DateCoder_DC601";
             tags.Define("DC_601_STATUS", BuiltInType.Int32, dc, description: "Date Coder Status (0=Off,1=Run,2=Fault)", initialValue: 0);
             tags.Define("DC_601_PRINT_CNT", BuiltInType.Int32, dc, description: "Print Count", initialValue: 0);
+            // PackML state
+            tags.Define("DC_601_OP_STATE", BuiltInType.Int32, dc, description: "PackML Operational State", initialValue: 1);
+            tags.Define("DC_601_OP_STATE_TXT", BuiltInType.String, dc, description: "PackML Operational State Text", initialValue: "Idle");
+            tags.Define("DC_601_STATE_DUR", BuiltInType.Double, dc, "sec", "Time in Current State", 0.0);
+            // PackML mode
+            tags.Define("DC_601_OP_MODE", BuiltInType.Int32, dc, description: "PackML Operational Mode", initialValue: 1);
+            tags.Define("DC_601_OP_MODE_TXT", BuiltInType.String, dc, description: "PackML Operational Mode Text", initialValue: "Idle");
+            tags.Define("DC_601_MODE_DUR", BuiltInType.Double, dc, "sec", "Time in Current Mode", 0.0);
 
             // X-Ray Inspector
             var xr = $"{p}/Inspector_XR601";
             tags.Define("XRAY_601_TOTAL", BuiltInType.Int32, xr, description: "X-Ray Total Inspected", initialValue: 0);
             tags.Define("XRAY_601_REJECT", BuiltInType.Int32, xr, description: "X-Ray Reject Count", initialValue: 0);
             tags.Define("XRAY_601_STATUS", BuiltInType.Int32, xr, description: "X-Ray Status", initialValue: 0);
+            // PackML state
+            tags.Define("XRAY_601_OP_STATE", BuiltInType.Int32, xr, description: "PackML Operational State", initialValue: 1);
+            tags.Define("XRAY_601_OP_STATE_TXT", BuiltInType.String, xr, description: "PackML Operational State Text", initialValue: "Idle");
+            tags.Define("XRAY_601_STATE_DUR", BuiltInType.Double, xr, "sec", "Time in Current State", 0.0);
+            // PackML mode
+            tags.Define("XRAY_601_OP_MODE", BuiltInType.Int32, xr, description: "PackML Operational Mode", initialValue: 1);
+            tags.Define("XRAY_601_OP_MODE_TXT", BuiltInType.String, xr, description: "PackML Operational Mode Text", initialValue: "Idle");
+            tags.Define("XRAY_601_MODE_DUR", BuiltInType.Double, xr, "sec", "Time in Current Mode", 0.0);
 
-            // Metal Detector
+            // Metal Detector (typically integrated with X-ray inspector station)
             tags.Define("MD_601_TRIP", BuiltInType.Boolean, xr, description: "Metal Detector Trip");
             tags.Define("MD_601_CNT", BuiltInType.Int32, xr, description: "Metal Detector Trip Count", initialValue: 0);
 
@@ -320,6 +394,14 @@ namespace BatchPlant.Process
             tags.Define("CP_601_CASES_CNT", BuiltInType.Int32, cp, description: "Cases Packed Count", initialValue: 0);
             tags.Define("CP_601_SPEED", BuiltInType.Double, cp, "cases/min", "Case Packer Speed", 0.0);
             tags.Define("CP_601_FAULT", BuiltInType.Boolean, cp, description: "Case Packer Fault");
+            // PackML state
+            tags.Define("CP_601_OP_STATE", BuiltInType.Int32, cp, description: "PackML Operational State", initialValue: 1);
+            tags.Define("CP_601_OP_STATE_TXT", BuiltInType.String, cp, description: "PackML Operational State Text", initialValue: "Idle");
+            tags.Define("CP_601_STATE_DUR", BuiltInType.Double, cp, "sec", "Time in Current State", 0.0);
+            // PackML mode
+            tags.Define("CP_601_OP_MODE", BuiltInType.Int32, cp, description: "PackML Operational Mode", initialValue: 1);
+            tags.Define("CP_601_OP_MODE_TXT", BuiltInType.String, cp, description: "PackML Operational Mode Text", initialValue: "Idle");
+            tags.Define("CP_601_MODE_DUR", BuiltInType.Double, cp, "sec", "Time in Current Mode", 0.0);
 
             // Palletizer
             var pal = $"{p}/Palletizer_PAL601";
@@ -327,6 +409,14 @@ namespace BatchPlant.Process
             tags.Define("PAL_601_LAYERS", BuiltInType.Int32, pal, description: "Current Pallet Layers", initialValue: 0);
             tags.Define("PAL_601_PALLETS_CNT", BuiltInType.Int32, pal, description: "Pallets Complete Count", initialValue: 0);
             tags.Define("PAL_601_FAULT", BuiltInType.Boolean, pal, description: "Palletizer Fault");
+            // PackML state
+            tags.Define("PAL_601_OP_STATE", BuiltInType.Int32, pal, description: "PackML Operational State", initialValue: 1);
+            tags.Define("PAL_601_OP_STATE_TXT", BuiltInType.String, pal, description: "PackML Operational State Text", initialValue: "Idle");
+            tags.Define("PAL_601_STATE_DUR", BuiltInType.Double, pal, "sec", "Time in Current State", 0.0);
+            // PackML mode
+            tags.Define("PAL_601_OP_MODE", BuiltInType.Int32, pal, description: "PackML Operational Mode", initialValue: 1);
+            tags.Define("PAL_601_OP_MODE_TXT", BuiltInType.String, pal, description: "PackML Operational Mode Text", initialValue: "Idle");
+            tags.Define("PAL_601_MODE_DUR", BuiltInType.Double, pal, "sec", "Time in Current Mode", 0.0);
         }
 
         private static void RegisterArea700(TagRegistry tags)
@@ -410,26 +500,93 @@ namespace BatchPlant.Process
             tags.Define("BATCH_PCT", BuiltInType.Double, p, "%", "Batch Progress Percent", 0.0);
             tags.Define("BATCH_START_TIME", BuiltInType.DateTime, p, description: "Batch Start Time");
             tags.Define("BATCH_END_TIME", BuiltInType.DateTime, p, description: "Batch End Time");
-            tags.Define("BATCHES_TODAY", BuiltInType.Int32, p, description: "Batches Completed Today", initialValue: 0);
             tags.Define("BATCH_SIZE_KG", BuiltInType.Double, p, "kg", "Batch Size", 3150.0);
         }
 
         private static void RegisterPlantStatus(TagRegistry tags)
         {
+            // Truly plant-wide tags only. Per-line metrics live in BatchLine/ and PackLine/.
             var p = "PlantStatus";
 
             tags.Define("PLANT_MODE", BuiltInType.String, p, description: "Plant Mode (Production/CIP/Maintenance/Idle)", initialValue: "Idle");
+            tags.Define("PLANT_RUNNING", BuiltInType.Boolean, p, description: "Plant Running (any line producing)");
             tags.Define("SHIFT_ID", BuiltInType.String, p, description: "Current Shift (Day/Swing/Night)", initialValue: "Day");
             tags.Define("SHIFT_CHANGE_ACTIVE", BuiltInType.Boolean, p, description: "Shift Changeover Active");
-            tags.Define("BOTTLES_TODAY", BuiltInType.Int32, p, description: "Bottles Produced Today", initialValue: 0);
-            tags.Define("CASES_TODAY", BuiltInType.Int32, p, description: "Cases Packed Today", initialValue: 0);
-            tags.Define("PALLETS_TODAY", BuiltInType.Int32, p, description: "Pallets Complete Today", initialValue: 0);
-            tags.Define("OEE_AVAILABILITY", BuiltInType.Double, p, "%", "OEE Availability", 0.0);
-            tags.Define("OEE_PERFORMANCE", BuiltInType.Double, p, "%", "OEE Performance", 0.0);
-            tags.Define("OEE_QUALITY", BuiltInType.Double, p, "%", "OEE Quality", 0.0);
-            tags.Define("OEE_OVERALL", BuiltInType.Double, p, "%", "OEE Overall", 0.0);
+            tags.Define("PLANT_TOTAL_PRODUCTION_TODAY", BuiltInType.Int32, p, "cases", "Total Cases Produced Today (all lines)", 0);
             tags.Define("SIM_SPEED", BuiltInType.Double, p, "x", "Simulation Speed Multiplier", 1.0);
             tags.Define("SIM_TIME", BuiltInType.DateTime, p, description: "Current Simulation Time");
+        }
+
+        private static void RegisterBatchLine(TagRegistry tags)
+        {
+            // Batch production line metrics (Areas 100-450 - dose, mix, cook, deaerate, homogenize, buffer)
+            // KPIs are batch-oriented: cycle time, batches per shift, recipe adherence
+            var p = "BatchLine";
+
+            tags.Define("BATCH_LINE_STATE", BuiltInType.String, p, description: "Batch Line State (Idle/Producing/CIP/Maintenance/Faulted)", initialValue: "Idle");
+            tags.Define("BATCH_LINE_RUNNING", BuiltInType.Boolean, p, description: "Batch Line Producing");
+
+            tags.Define("BATCHES_TODAY", BuiltInType.Int32, p, description: "Batches Completed Today", initialValue: 0);
+            tags.Define("BATCHES_THIS_SHIFT", BuiltInType.Int32, p, description: "Batches Completed This Shift", initialValue: 0);
+            tags.Define("CURRENT_BATCH_ID", BuiltInType.String, p, description: "Currently Running Batch ID", initialValue: "");
+
+            tags.Define("AVG_BATCH_CYCLE_MIN", BuiltInType.Double, p, "min", "Rolling Average Batch Cycle Time", 0.0);
+            tags.Define("LAST_BATCH_CYCLE_MIN", BuiltInType.Double, p, "min", "Last Batch Cycle Time", 0.0);
+
+            tags.Define("BATCH_LINE_OEE_AVAIL", BuiltInType.Double, p, "%", "Batch Line Availability", 0.0);
+            tags.Define("BATCH_LINE_OEE_PERF", BuiltInType.Double, p, "%", "Batch Line Performance", 0.0);
+            tags.Define("BATCH_LINE_OEE_QUAL", BuiltInType.Double, p, "%", "Batch Line Quality (Cooks Within Spec)", 0.0);
+            tags.Define("BATCH_LINE_OEE_OVERALL", BuiltInType.Double, p, "%", "Batch Line OEE Overall", 0.0);
+
+            tags.Define("BATCH_LINE_RUNTIME_MIN", BuiltInType.Double, p, "min", "Batch Line Runtime Today", 0.0);
+            tags.Define("BATCH_LINE_DOWNTIME_MIN", BuiltInType.Double, p, "min", "Batch Line Downtime Today", 0.0);
+            tags.Define("BATCH_LINE_CIP_TIME_MIN", BuiltInType.Double, p, "min", "Batch Line CIP Time Today", 0.0);
+        }
+
+        private static void RegisterPackLine(TagRegistry tags)
+        {
+            // Packaging line metrics (Areas 500-600 - filling, capping, cooling, labeling, casing, palletizing)
+            // KPIs are PackML-oriented: bottles/min, OEE, micro-stops, bottleneck identification
+            var p = "PackLine";
+
+            // Line-level PackML state (computed from constituent machine states - common in Krones systems)
+            tags.Define("PACK_LINE_OP_STATE", BuiltInType.Int32, p, description: "Packaging Line PackML State (0=Disabled,1=Idle,2=Running,3=Starved,4=Blocked,5=PlannedDT,6=UnplannedDT,7=Other)", initialValue: 1);
+            tags.Define("PACK_LINE_OP_STATE_TXT", BuiltInType.String, p, description: "Packaging Line State Text", initialValue: "Idle");
+            tags.Define("PACK_LINE_BOTTLENECK", BuiltInType.String, p, description: "Current Bottleneck Equipment", initialValue: "");
+
+            // Line-level PackML mode (set by operator/MES, applies to the whole line)
+            tags.Define("PACK_LINE_OP_MODE", BuiltInType.Int32, p, description: "Packaging Line PackML Mode (0=Disabled,1=Idle,2=Production,3=Changeover,4=Maintenance,5=Cleaning,6=Other)", initialValue: 1);
+            tags.Define("PACK_LINE_OP_MODE_TXT", BuiltInType.String, p, description: "Packaging Line Mode Text", initialValue: "Idle");
+            tags.Define("PACK_LINE_MODE_DUR", BuiltInType.Double, p, "sec", "Time in Current Mode", 0.0);
+            tags.Define("PACK_LINE_CURRENT_SKU", BuiltInType.String, p, description: "Currently Running SKU/Product Code", initialValue: "");
+            tags.Define("PACK_LINE_NEXT_SKU", BuiltInType.String, p, description: "Next Scheduled SKU (for changeover planning)", initialValue: "");
+
+            // Time-in-mode accumulators today (used for SMED and shift reporting)
+            tags.Define("PACK_LINE_PRODUCTION_MIN", BuiltInType.Double, p, "min", "Time in Production Mode Today", 0.0);
+            tags.Define("PACK_LINE_CHANGEOVER_MIN", BuiltInType.Double, p, "min", "Time in Changeover Mode Today", 0.0);
+            tags.Define("PACK_LINE_CLEANING_MIN", BuiltInType.Double, p, "min", "Time in Cleaning Mode Today", 0.0);
+            tags.Define("PACK_LINE_MAINTENANCE_MIN", BuiltInType.Double, p, "min", "Time in Maintenance Mode Today", 0.0);
+            tags.Define("PACK_LINE_IDLE_MIN", BuiltInType.Double, p, "min", "Time in Idle Mode Today", 0.0);
+            tags.Define("PACK_LINE_CHANGEOVERS_TODAY", BuiltInType.Int32, p, description: "Number of Changeovers Today", initialValue: 0);
+            tags.Define("PACK_LINE_LAST_CHANGEOVER_MIN", BuiltInType.Double, p, "min", "Duration of Last Changeover", 0.0);
+
+            tags.Define("BOTTLES_TODAY", BuiltInType.Int32, p, description: "Bottles Produced Today", initialValue: 0);
+            tags.Define("BOTTLES_THIS_SHIFT", BuiltInType.Int32, p, description: "Bottles Produced This Shift", initialValue: 0);
+            tags.Define("CASES_TODAY", BuiltInType.Int32, p, description: "Cases Packed Today", initialValue: 0);
+            tags.Define("PALLETS_TODAY", BuiltInType.Int32, p, description: "Pallets Complete Today", initialValue: 0);
+
+            tags.Define("PACK_LINE_SPEED", BuiltInType.Double, p, "BPM", "Current Line Speed", 0.0);
+            tags.Define("PACK_LINE_TARGET_SPEED", BuiltInType.Double, p, "BPM", "Target Line Speed", 200.0);
+
+            tags.Define("PACK_LINE_OEE_AVAIL", BuiltInType.Double, p, "%", "Packaging Line Availability", 0.0);
+            tags.Define("PACK_LINE_OEE_PERF", BuiltInType.Double, p, "%", "Packaging Line Performance", 0.0);
+            tags.Define("PACK_LINE_OEE_QUAL", BuiltInType.Double, p, "%", "Packaging Line Quality (First Pass Yield)", 0.0);
+            tags.Define("PACK_LINE_OEE_OVERALL", BuiltInType.Double, p, "%", "Packaging Line OEE Overall", 0.0);
+
+            tags.Define("PACK_LINE_RUNTIME_MIN", BuiltInType.Double, p, "min", "Packaging Line Runtime Today", 0.0);
+            tags.Define("PACK_LINE_DOWNTIME_MIN", BuiltInType.Double, p, "min", "Packaging Line Downtime Today", 0.0);
+            tags.Define("PACK_LINE_MICROSTOPS_TODAY", BuiltInType.Int32, p, description: "Micro-stops Today (<5 min)", initialValue: 0);
+            tags.Define("PACK_LINE_MAJOR_STOPS_TODAY", BuiltInType.Int32, p, description: "Major Stops Today (>5 min)", initialValue: 0);
         }
     }
 }

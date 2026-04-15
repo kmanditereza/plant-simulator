@@ -1,0 +1,7 @@
+Tag Name    : LBL_601_MODE_DUR
+Data Type   : Double
+Folder Path : Area600_Packaging/Labeler_LBL601
+Unit        : sec
+Description : Time in Current Mode
+Initial     : 0
+Writable    : False
