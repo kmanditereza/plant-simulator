@@ -7,5 +7,5 @@ services:
     ports:
       - "26543:26543"
     environment:
-      - SIM_SPEED=1
+      - SIM_SPEED=60
     restart: unless-stopped

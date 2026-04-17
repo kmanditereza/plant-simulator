@@ -1,12 +1,23 @@
 using BatchPlant.Core;
-using Opc.Ua;
 
 namespace BatchPlant.Equipment
 {
     /// <summary>
+    /// Maps vessel outputs to OPC UA tag names. Null entries are not published.
+    /// </summary>
+    public class VesselTagMap
+    {
+        public string? Level { get; set; }
+        public string? LevelPct { get; set; }
+        public string? Temperature { get; set; }
+        public string? Pressure { get; set; }
+        public string? Weight { get; set; }
+    }
+
+    /// <summary>
     /// Tank/vessel/kettle model with level, temperature, pressure tracking.
-    /// Supports mass balance (inflows-outflows), heat balance, and optional agitation.
-    /// Used for paste tanks, premix tank, cook kettle, buffer tanks, etc.
+    /// Supports mass balance (inflows-outflows) and heat balance.
+    /// Area controllers call AddMaterial/RemoveMaterial to move fluid in/out.
     /// </summary>
     public class Vessel : EquipmentBase
     {
@@ -15,47 +26,45 @@ namespace BatchPlant.Equipment
         public double Temperature { get; set; }     // degC
         public double Pressure { get; set; }        // bar (gauge)
         public double LevelPercent => Capacity > 0 ? (Level / Capacity) * 100.0 : 0;
+        public double Weight => Level * Density;    // kg (mass-based on density)
 
         // Configuration
-        public double Capacity { get; set; } = 5000;       // Liters max
-        public double AmbientTemp { get; set; } = 22.0;    // degC
-        public double HeatLossCoefficient { get; set; } = 0.001; // degC/sec per degC difference (insulation quality)
-        public double AtmosphericPressure { get; set; } = 0.0;   // barg (0 = atmospheric)
+        public double Capacity { get; set; } = 5000;
+        public double AmbientTemp { get; set; } = 22.0;
+        public double HeatLossCoefficient { get; set; } = 0.001;
+        public double AtmosphericPressure { get; set; } = 0.0;
+        public double Density { get; set; } = 1.0;              // kg/L (water=1.0, ketchup~1.1)
         public bool IsJacketed { get; set; }
-        public double JacketTemp { get; set; }              // Jacket/steam temp degC
-        public double JacketHeatTransferCoeff { get; set; } = 0.05; // Heat transfer rate
+        public double JacketTemp { get; set; }
+        public double JacketHeatTransferCoeff { get; set; } = 0.05;
 
-        // Tags
-        private string _tLevel = "";
-        private string _tLevelPct = "";
-        private string _tTemp = "";
-        private string _tPress = "";
+        /// <summary>
+        /// Additional heat input (kW) set by area controller each tick.
+        /// Used for agitator heat dissipation, electrical heating elements, etc.
+        /// </summary>
+        public double ExternalHeatInputKw { get; set; } = 0;
+
+        private VesselTagMap _tags = new();
 
         public override int Priority => 30;
 
-        public Vessel(PlantContext ctx, string tagPrefix) : base(ctx, tagPrefix)
+        public Vessel(PlantContext ctx, string name) : base(ctx, name)
         {
             Temperature = AmbientTemp;
         }
 
-        public override void RegisterTags(string folderPath)
+        /// <summary>
+        /// Bind this vessel's outputs to OPC UA tag names. Fluent.
+        /// </summary>
+        public Vessel Bind(VesselTagMap tags)
         {
-            _tLevel = $"{TagPrefix}_LVL";
-            _tLevelPct = $"{TagPrefix}_LVL_PCT";
-            _tTemp = $"{TagPrefix}_TEMP";
-            _tPress = $"{TagPrefix}_PRESS";
-
-            Ctx.Tags.Define(_tLevel, BuiltInType.Double, folderPath, "L", $"{TagPrefix} Level");
-            Ctx.Tags.Define(_tLevelPct, BuiltInType.Double, folderPath, "%", $"{TagPrefix} Level Percent");
-            Ctx.Tags.Define(_tTemp, BuiltInType.Double, folderPath, "degC", $"{TagPrefix} Temperature");
-            Ctx.Tags.Define(_tPress, BuiltInType.Double, folderPath, "bar", $"{TagPrefix} Pressure");
+            _tags = tags;
+            return this;
         }
 
         /// <summary>
-        /// Add material to the vessel.
+        /// Add material to the vessel (mass-weighted temperature mix).
         /// </summary>
-        /// <param name="volume">Liters to add.</param>
-        /// <param name="temperature">Temperature of incoming material (degC).</param>
         public void AddMaterial(double volume, double temperature)
         {
             if (volume <= 0) return;
@@ -63,7 +72,6 @@ namespace BatchPlant.Equipment
             if (newTotal > Capacity) volume = Capacity - Level;
             if (volume <= 0) return;
 
-            // Mix temperature (mass-weighted average, assuming density ~1)
             if (Level > 0)
             {
                 Temperature = (Level * Temperature + volume * temperature) / (Level + volume);
@@ -76,7 +84,7 @@ namespace BatchPlant.Equipment
         }
 
         /// <summary>
-        /// Remove material from the vessel. Returns actual amount removed.
+        /// Remove material. Returns actual amount removed.
         /// </summary>
         public double RemoveMaterial(double volume)
         {
@@ -97,18 +105,27 @@ namespace BatchPlant.Equipment
             }
 
             // Jacket heating/cooling
-            if (IsJacketed && Level > 0 && JacketTemp != Temperature)
+            if (IsJacketed && Level > 0 && Math.Abs(JacketTemp - Temperature) > 0.01)
             {
                 double heatTransfer = JacketHeatTransferCoeff * (JacketTemp - Temperature) * dtSec;
-                // Scale heat transfer by fill fraction (less contact area when low level)
                 double fillFrac = Math.Min(1.0, Level / Capacity);
                 Temperature += heatTransfer * fillFrac;
             }
 
-            // Pressure (for sealed vessels, increases with temp; otherwise atmospheric)
+            // External heat input (positive = heating, negative = cooling)
+            if (ExternalHeatInputKw != 0 && Level > 0)
+            {
+                // specific heat ~3.5 kJ/(kg·K) for food product
+                double massKg = Level * Density;
+                double deltaT = (ExternalHeatInputKw * dtSec) / (massKg * 3.5);
+                Temperature += deltaT;
+            }
+            ExternalHeatInputKw = 0; // reset each tick; controller re-sets if needed
+
+            // Pressure (atmospheric vessels)
             if (AtmosphericPressure == 0)
             {
-                Pressure = Ctx.AddNoise(0.0, 0.005); // Atmospheric gauge
+                Pressure = Ctx.AddNoise(0.0, 0.005);
             }
 
             Level = Math.Clamp(Level, 0, Capacity);
@@ -119,10 +136,11 @@ namespace BatchPlant.Equipment
 
         protected override void WriteTags()
         {
-            Ctx.Tags.Write(_tLevel, Math.Round(Level, 1));
-            Ctx.Tags.Write(_tLevelPct, Math.Round(LevelPercent, 1));
-            Ctx.Tags.Write(_tTemp, Math.Round(Ctx.AddNoise(Temperature, 0.1), 1));
-            Ctx.Tags.Write(_tPress, Math.Round(Pressure, 3));
+            if (_tags.Level != null) Ctx.Tags.Write(_tags.Level, Math.Round(Level, 1));
+            if (_tags.LevelPct != null) Ctx.Tags.Write(_tags.LevelPct, Math.Round(LevelPercent, 1));
+            if (_tags.Temperature != null) Ctx.Tags.Write(_tags.Temperature, Math.Round(Ctx.AddNoise(Temperature, 0.1), 1));
+            if (_tags.Pressure != null) Ctx.Tags.Write(_tags.Pressure, Math.Round(Pressure, 3));
+            if (_tags.Weight != null) Ctx.Tags.Write(_tags.Weight, Math.Round(Weight, 1));
         }
     }
 }

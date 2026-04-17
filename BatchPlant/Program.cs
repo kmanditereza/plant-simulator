@@ -3,6 +3,8 @@ using Opc.Ua.Configuration;
 using BatchPlant.Core;
 using BatchPlant.OpcUa;
 using BatchPlant.Process;
+using BatchPlant.Equipment;
+using BatchPlant.Batch;
 
 namespace BatchPlant
 {
@@ -66,11 +68,60 @@ namespace BatchPlant
                 Console.WriteLine();
 
                 // 4. Register simulation components
-                //    For now: TagFlusher (pushes values to OPC UA) + idle sensor simulation
                 var flusher = new TagFlusher(tags);
                 engine.Register(flusher);
 
-                // Register a simple idle simulator to show tags are alive
+                // Area 800: Utilities (no dependencies)
+                var area800 = new Area800_UtilitiesController(ctx);
+                engine.Register(area800);
+                Console.WriteLine("[AREA800] Utilities controller registered (steam, cooling, air, hot water)");
+
+                // Area 100: Raw material storage (no dependencies, provides draw API)
+                var area100 = new Area100_RawMaterialsController(ctx);
+                engine.Register(area100);
+                Console.WriteLine("[AREA100] Raw Materials controller registered (paste tanks, vinegar, silos, P-101/102)");
+
+                // Area 200: Pre-Mix (depends on Area 100 for ingredients, IProductSource for Area 300)
+                var area200 = new Area200_PreMixController(ctx, area100);
+                engine.Register(area200);
+                Console.WriteLine("[AREA200] Pre-Mix controller registered (MX-201, AGIT-201, XV-201..204, FCV-201)");
+
+                // Area 450: Buffer tanks (no inbound deps - Area 400 pushes here)
+                var area450 = new Area450_BufferTanksController(ctx);
+                engine.Register(area450);
+                Console.WriteLine("[AREA450] Buffer tanks controller registered (BT-451, BT-452, BT-453)");
+
+                // Area 300: Cooking (depends on Area 800 for steam, Area 200 for upstream product)
+                var area300 = new Area300_CookingController(ctx, area800, area200);
+                engine.Register(area300);
+                Console.WriteLine("[AREA300] Cooking controller registered (KT-301, AGIT-301, TCV-301, SV301, PID_301)");
+
+                // Area 400: Deaeration and Homogenization (pulls from Area 300, pushes to Area 450)
+                var area400 = new Area400_ProcessingController(ctx, area300, area450);
+                engine.Register(area400);
+                Console.WriteLine("[AREA400] Processing controller registered (DA-401 vacuum, HG-401 homogenizer)");
+
+                // Area 500: Filling line (consumes from Area 450 buffer tanks)
+                var area500 = new Area500_FillingLineController(ctx, area450);
+                engine.Register(area500);
+                Console.WriteLine("[AREA500] Filling line controller registered (FL-501, CAP-501, inv/cool tunnels, CONV-501)");
+
+                // Area 600: Packaging line (consumes bottles from Area 500)
+                var area600 = new Area600_PackagingLineController(ctx, area500);
+                engine.Register(area600);
+                Console.WriteLine("[AREA600] Packaging line controller registered (LBL-601, DC-601, XR-601, CP-601, PAL-601)");
+
+                // Area 700: CIP (Clean-in-Place)
+                var area700 = new Area700_CIPController(ctx);
+                engine.Register(area700);
+                Console.WriteLine("[AREA700] CIP controller registered (7-step sequence: pre-rinse, caustic, int-rinse, acid, final-rinse, sanitize, drain)");
+
+                // Batch Manager - observes state transitions, assigns Batch IDs, collects report parameters
+                var batchManager = new BatchManager(ctx);
+                engine.Register(batchManager);
+                Console.WriteLine("[BATCH] BatchManager registered - observing Area 200/300/400, writing records to ./batch-records/");
+
+                // Remaining areas: lightweight idle simulator until their controllers are built
                 var idleSim = new IdleSimulator(ctx);
                 engine.Register(idleSim);
 
@@ -173,38 +224,12 @@ namespace BatchPlant
             tags.Write("SIM_TIME", simNow);
             tags.Write("SHIFT_ID", _ctx.Clock.CurrentShift.ToString());
 
-            // Area 100: Raw material storage - slow ambient drift
-            tags.Write("PASTE_TK1_TEMP", Math.Round(_ctx.AddNoise(18.0, 0.3), 1));
-            tags.Write("PASTE_TK2_TEMP", Math.Round(_ctx.AddNoise(18.0, 0.3), 1));
-            tags.Write("VIN_TK_TEMP", Math.Round(_ctx.AddNoise(20.0, 0.2), 1));
-            tags.Write("H2O_PRESS", Math.Round(_ctx.AddNoise(4.2, 0.05), 2));
-            tags.Write("H2O_TEMP", Math.Round(_ctx.AddNoise(15.0, 0.3), 1));
-
-            // Area 200: Premix idle
-            tags.Write("TIT-201", Math.Round(_ctx.AddNoise(22.0, 0.15), 1));
-
-            // Area 300: Kettle idle
-            tags.Write("TIT-301", Math.Round(_ctx.AddNoise(22.0, 0.15), 1));
-            tags.Write("TIT-302", Math.Round(_ctx.AddNoise(22.0, 0.15), 1));
-
-            // Area 400: idle
-            tags.Write("401-TI-001", Math.Round(_ctx.AddNoise(22.0, 0.2), 1));
-
-            // Area 450: Buffer tanks idle
-            tags.Write("BT451_TEMP", Math.Round(_ctx.AddNoise(22.0, 0.15), 1));
-            tags.Write("BT452_TEMP", Math.Round(_ctx.AddNoise(22.0, 0.15), 1));
-            tags.Write("BT453_TEMP", Math.Round(_ctx.AddNoise(22.0, 0.15), 1));
-
-            // Area 800: Utilities always running
-            tags.Write("STM_HDR_PRESS", Math.Round(_ctx.AddNoise(6.0, 0.05), 2));
-            tags.Write("STM_HDR_TEMP", Math.Round(_ctx.AddNoise(165.0, 0.5), 1));
-            tags.Write("BOILER_PRESS", Math.Round(_ctx.AddNoise(7.0, 0.03), 2));
-            tags.Write("BOILER_EFF", Math.Round(_ctx.AddNoise(92.0, 0.3), 1));
-            tags.Write("COMP_AIR_PRESS", Math.Round(_ctx.AddNoise(6.5, 0.1), 2));
-            tags.Write("CW_SUP_TEMP", Math.Round(_ctx.AddNoise(8.0, 0.3), 1));
-            tags.Write("CW_RET_TEMP", Math.Round(_ctx.AddNoise(14.0, 0.5), 1));
-            tags.Write("CW_BASIN_LVL", Math.Round(_ctx.AddNoise(85.0, 0.2), 1));
-            tags.Write("CW_COND", Math.Round(_ctx.AddNoise(350.0, 5.0), 0));
+            // Area 100: owned by Area100_RawMaterialsController (not touched here)
+            // Area 200: owned by Area200_PreMixController (not touched here)
+            // Area 300: owned by Area300_CookingController (not touched here)
+            // Area 400: owned by Area400_ProcessingController (not touched here)
+            // Area 450: owned by Area450_BufferTanksController (not touched here)
+            // Area 800: owned by Area800_UtilitiesController (not touched here)
 
             // Periodic console log
             _logCounter++;

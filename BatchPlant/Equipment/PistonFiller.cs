@@ -1,8 +1,23 @@
 using BatchPlant.Core;
-using Opc.Ua;
 
 namespace BatchPlant.Equipment
 {
+    /// <summary>
+    /// Maps piston filler outputs to OPC UA tag names. Null entries are not published.
+    /// </summary>
+    public class PistonFillerTagMap
+    {
+        public string? CurrentWeight { get; set; }
+        public string? Rate { get; set; }
+        public string? GoodCount { get; set; }
+        public string? RejectCount { get; set; }
+        public string? TotalCount { get; set; }
+        public string? WeightAvg { get; set; }
+        public string? WeightStdDev { get; set; }
+        public string? Yield { get; set; }
+        public string? Status { get; set; }
+    }
+
     /// <summary>
     /// Piston filler head model for hot-fill ketchup bottles.
     /// Tracks fill weight accuracy with piston wear degradation.
@@ -11,8 +26,8 @@ namespace BatchPlant.Equipment
     public class PistonFiller : EquipmentBase
     {
         // Process values
-        public double CurrentWeight { get; private set; }    // g (last filled)
-        public double FillRate { get; set; }                 // bottles/min
+        public double CurrentWeight { get; private set; }
+        public double FillRate { get; set; }           // bottles/min setpoint
         public double ActualRate { get; private set; }
         public long GoodCount { get; set; }
         public long RejectCount { get; set; }
@@ -22,83 +37,59 @@ namespace BatchPlant.Equipment
         public double FirstPassYield => TotalCount > 0 ? (double)GoodCount / TotalCount * 100.0 : 100.0;
 
         // Configuration
-        public double TargetWeight { get; set; } = 397;       // g (14oz bottle)
-        public double BaseStdDev { get; set; } = 3.0;         // g (new piston)
-        public double WearDegradation { get; set; } = 0.5;    // g std dev increase per 100 run hours
-        public double UnderweightLimit { get; set; } = 388;    // g (-2.3%)
-        public double OverweightLimit { get; set; } = 406;     // g (+2.3%)
-        public double MinFillTemp { get; set; } = 82.0;       // degC (food safety)
+        public double TargetWeight { get; set; } = 397;
+        public double BaseStdDev { get; set; } = 3.0;
+        public double WearDegradation { get; set; } = 0.5;
+        public double UnderweightLimit { get; set; } = 388;
+        public double OverweightLimit { get; set; } = 406;
+        public double MinFillTemp { get; set; } = 82.0;
 
-        // Fill temperature (set by process area)
         public double ProductTemp { get; set; } = 85.0;
 
-        // Internal state for fill cycle timing
         private double _fillAccumulator;
         private readonly List<double> _recentWeights = new();
         private const int RecentWindowSize = 50;
 
-        // Tags
-        private string _tWeight = "";
-        private string _tRate = "";
-        private string _tGood = "";
-        private string _tReject = "";
-        private string _tTotal = "";
-        private string _tAvg = "";
-        private string _tStdDev = "";
-        private string _tYield = "";
-        private string _tStatus = "";
+        private PistonFillerTagMap _tags = new();
 
-        public PistonFiller(PlantContext ctx, string tagPrefix) : base(ctx, tagPrefix)
+        public PistonFiller(PlantContext ctx, string name) : base(ctx, name)
         {
             SetTransitionDelays(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(3));
         }
 
-        public override void RegisterTags(string folderPath)
+        public PistonFiller Bind(PistonFillerTagMap tags)
         {
-            _tWeight = $"{TagPrefix}_WEIGHT";
-            _tRate = $"{TagPrefix}_FILL_SPD";
-            _tGood = $"{TagPrefix}_GOOD_CNT";
-            _tReject = $"{TagPrefix}_REJECT_CNT";
-            _tTotal = $"{TagPrefix}_TOTAL_CNT";
-            _tAvg = $"{TagPrefix}_WT_AVG";
-            _tStdDev = $"{TagPrefix}_WT_STDDEV";
-            _tYield = $"{TagPrefix}_YIELD";
-            _tStatus = $"{TagPrefix}_STATUS";
-
-            Ctx.Tags.Define(_tWeight, BuiltInType.Double, folderPath, "g", $"{TagPrefix} Current Fill Weight");
-            Ctx.Tags.Define(_tRate, BuiltInType.Double, folderPath, "BPM", $"{TagPrefix} Fill Speed");
-            Ctx.Tags.Define(_tGood, BuiltInType.Int32, folderPath, description: $"{TagPrefix} Good Count", initialValue: 0);
-            Ctx.Tags.Define(_tReject, BuiltInType.Int32, folderPath, description: $"{TagPrefix} Reject Count", initialValue: 0);
-            Ctx.Tags.Define(_tTotal, BuiltInType.Int32, folderPath, description: $"{TagPrefix} Total Count", initialValue: 0);
-            Ctx.Tags.Define(_tAvg, BuiltInType.Double, folderPath, "g", $"{TagPrefix} Weight Average");
-            Ctx.Tags.Define(_tStdDev, BuiltInType.Double, folderPath, "g", $"{TagPrefix} Weight Std Dev");
-            Ctx.Tags.Define(_tYield, BuiltInType.Double, folderPath, "%", $"{TagPrefix} First Pass Yield");
-            Ctx.Tags.Define(_tStatus, BuiltInType.Int32, folderPath, description: $"{TagPrefix} Status (0=Off,1=Run,2=Fault,3=TempLow)", initialValue: 0);
+            _tags = tags;
+            return this;
         }
 
-        protected override void UpdateRunning(TimeSpan dt, DateTime simNow)
+        /// <summary>
+        /// Fill one or more bottles this tick. Returns number of bottles actually filled.
+        /// Called by the line controller when the line is running and product is available.
+        /// </summary>
+        public int FillBottles(TimeSpan dt)
         {
-            // Piston wear increases fill weight variation
+            if (State != EquipmentState.Running) return 0;
+
             double currentStdDev = BaseStdDev + (RunHoursSinceService / 100.0) * WearDegradation;
 
-            // Accumulate fractional bottles based on rate
-            ActualRate = Ctx.AddNoise(FillRate, FillRate * 0.01);
+            ActualRate = Ctx.AddNoise(FillRate, FillRate * 0.005);
             _fillAccumulator += ActualRate * dt.TotalMinutes;
 
-            // Fill whole bottles
+            int filled = 0;
             while (_fillAccumulator >= 1.0)
             {
                 _fillAccumulator -= 1.0;
                 FillOneBottle(currentStdDev);
+                filled++;
             }
+            return filled;
         }
 
         private void FillOneBottle(double stdDev)
         {
-            // Generate fill weight with Gaussian distribution
             CurrentWeight = Ctx.NextGaussian(TargetWeight, stdDev);
 
-            // Temperature check
             if (ProductTemp < MinFillTemp)
             {
                 RejectCount++;
@@ -106,7 +97,6 @@ namespace BatchPlant.Equipment
                 return;
             }
 
-            // Weight classification
             if (CurrentWeight < UnderweightLimit || CurrentWeight > OverweightLimit)
             {
                 RejectCount++;
@@ -149,15 +139,15 @@ namespace BatchPlant.Equipment
                 _ => 0
             };
 
-            Ctx.Tags.Write(_tWeight, Math.Round(CurrentWeight, 1));
-            Ctx.Tags.Write(_tRate, Math.Round(ActualRate, 1));
-            Ctx.Tags.Write(_tGood, (int)GoodCount);
-            Ctx.Tags.Write(_tReject, (int)RejectCount);
-            Ctx.Tags.Write(_tTotal, (int)TotalCount);
-            Ctx.Tags.Write(_tAvg, Math.Round(WeightAvg, 1));
-            Ctx.Tags.Write(_tStdDev, Math.Round(WeightStdDev, 2));
-            Ctx.Tags.Write(_tYield, Math.Round(FirstPassYield, 1));
-            Ctx.Tags.Write(_tStatus, status);
+            if (_tags.CurrentWeight != null) Ctx.Tags.Write(_tags.CurrentWeight, Math.Round(CurrentWeight, 1));
+            if (_tags.Rate != null) Ctx.Tags.Write(_tags.Rate, Math.Round(ActualRate, 1));
+            if (_tags.GoodCount != null) Ctx.Tags.Write(_tags.GoodCount, (int)GoodCount);
+            if (_tags.RejectCount != null) Ctx.Tags.Write(_tags.RejectCount, (int)RejectCount);
+            if (_tags.TotalCount != null) Ctx.Tags.Write(_tags.TotalCount, (int)TotalCount);
+            if (_tags.WeightAvg != null) Ctx.Tags.Write(_tags.WeightAvg, Math.Round(WeightAvg, 1));
+            if (_tags.WeightStdDev != null) Ctx.Tags.Write(_tags.WeightStdDev, Math.Round(WeightStdDev, 2));
+            if (_tags.Yield != null) Ctx.Tags.Write(_tags.Yield, Math.Round(FirstPassYield, 1));
+            if (_tags.Status != null) Ctx.Tags.Write(_tags.Status, status);
         }
     }
 }

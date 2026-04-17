@@ -1,82 +1,86 @@
 using BatchPlant.Core;
-using Opc.Ua;
 
 namespace BatchPlant.Equipment
 {
     /// <summary>
+    /// Maps vacuum system outputs to OPC UA tag names. Null entries are not published.
+    /// </summary>
+    public class VacuumSystemTagMap
+    {
+        public string? VacuumLevel { get; set; }
+        public string? Run { get; set; }
+        public string? Fault { get; set; }
+        public string? Current { get; set; }
+    }
+
+    /// <summary>
     /// Vacuum pump + condenser system for deaeration.
-    /// Maintains vacuum level (negative gauge pressure) with leak model.
+    /// Maintains vacuum level (mmHg, 0 = atmospheric, 760 = perfect vacuum) with leak model.
     /// Used to remove dissolved oxygen from ketchup before filling.
     /// </summary>
     public class VacuumSystem : EquipmentBase
     {
         // Process values
-        public double VacuumLevel { get; private set; }      // mmHg (0 = atmospheric, 760 = perfect vacuum)
-        public double VacuumSetpoint { get; set; } = 700;    // mmHg target
-        public double Current { get; private set; }          // A
-        public double CondenserTemp { get; private set; }    // degC
+        public double VacuumLevel { get; private set; }
+        public double VacuumSetpoint { get; set; } = 700;
+        public double Current { get; private set; }
+        public double CondenserTemp { get; private set; }
 
         // Configuration
-        public double MaxVacuum { get; set; } = 740;         // mmHg max achievable
-        public double LeakRate { get; set; } = 0.5;          // mmHg/sec leak when pump off
-        public double PumpDownRate { get; set; } = 50;       // mmHg/sec pump capacity
-        public double RatedCurrent { get; set; } = 20;       // A
+        public double MaxVacuum { get; set; } = 740;
+        public double LeakRate { get; set; } = 2.0;       // mmHg/sec decay when off
+        public double PumpDownRate { get; set; } = 30;    // mmHg/sec pull when pumping
+        public double RatedCurrent { get; set; } = 20;
 
-        // Tags
-        private string _tVacuum = "";
-        private string _tRun = "";
-        private string _tFault = "";
+        private VacuumSystemTagMap _tags = new();
 
-        public VacuumSystem(PlantContext ctx, string tagPrefix) : base(ctx, tagPrefix)
+        public VacuumSystem(PlantContext ctx, string name) : base(ctx, name)
         {
             SetTransitionDelays(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(3));
         }
 
-        public override void RegisterTags(string folderPath)
+        public VacuumSystem Bind(VacuumSystemTagMap tags)
         {
-            _tVacuum = $"{TagPrefix}_VAC";
-            _tRun = $"{TagPrefix}_RUN";
-            _tFault = $"{TagPrefix}_FAULT";
-
-            Ctx.Tags.Define(_tVacuum, BuiltInType.Double, folderPath, "mmHg", $"{TagPrefix} Vacuum Level");
-            Ctx.Tags.Define(_tRun, BuiltInType.Boolean, folderPath, description: $"{TagPrefix} Running");
-            Ctx.Tags.Define(_tFault, BuiltInType.Boolean, folderPath, description: $"{TagPrefix} Fault");
+            _tags = tags;
+            return this;
         }
 
         protected override void UpdateRunning(TimeSpan dt, DateTime simNow)
         {
             double dtSec = dt.TotalSeconds;
 
-            // Pump toward setpoint, fighting leaks
+            // Pump down toward setpoint, fighting natural leak
             double pumpEffect = PumpDownRate * dtSec;
             double leakEffect = LeakRate * dtSec;
 
             if (VacuumLevel < VacuumSetpoint)
             {
+                // Pulling down
                 VacuumLevel += pumpEffect - leakEffect;
             }
             else
             {
-                // Maintain: just compensate for leaks
-                VacuumLevel += (leakEffect * 0.1) - leakEffect; // Slight overshoot/undershoot
+                // At setpoint - maintain by just compensating for leaks
+                double error = VacuumLevel - VacuumSetpoint;
+                VacuumLevel -= error * 0.2; // return toward setpoint
+                VacuumLevel -= leakEffect * 0.1; // slight over-pumping
             }
 
             VacuumLevel = Math.Clamp(VacuumLevel, 0, MaxVacuum);
-            VacuumLevel = Ctx.AddNoise(VacuumLevel, 1.0);
 
-            // Current based on load (higher when pumping down, lower when maintaining)
+            // Current based on whether we're actively pumping or just maintaining
             double loadFrac = VacuumLevel < VacuumSetpoint * 0.95 ? 1.0 : 0.4;
             Current = RatedCurrent * loadFrac;
             Current = Ctx.AddNoise(Current, 0.2);
 
-            // Condenser temperature
+            // Condenser temp rises with load
             CondenserTemp = 30 + (VacuumLevel / MaxVacuum) * 15;
             CondenserTemp = Ctx.AddNoise(CondenserTemp, 0.5);
         }
 
         protected override void UpdateIdle(TimeSpan dt, DateTime simNow)
         {
-            // Vacuum decays due to leaks
+            // Vacuum decays due to leaks when pump is off
             VacuumLevel -= LeakRate * dt.TotalSeconds;
             VacuumLevel = Math.Max(0, VacuumLevel);
             Current = 0;
@@ -85,9 +89,13 @@ namespace BatchPlant.Equipment
 
         protected override void WriteTags()
         {
-            Ctx.Tags.Write(_tVacuum, Math.Round(VacuumLevel, 0));
-            Ctx.Tags.Write(_tRun, State == EquipmentState.Running);
-            Ctx.Tags.Write(_tFault, State == EquipmentState.Faulted);
+            double noisy = Ctx.AddNoise(VacuumLevel, 1.5);
+            noisy = Math.Max(0, noisy);
+
+            if (_tags.VacuumLevel != null) Ctx.Tags.Write(_tags.VacuumLevel, Math.Round(noisy, 0));
+            if (_tags.Run != null) Ctx.Tags.Write(_tags.Run, State == EquipmentState.Running);
+            if (_tags.Fault != null) Ctx.Tags.Write(_tags.Fault, State == EquipmentState.Faulted);
+            if (_tags.Current != null) Ctx.Tags.Write(_tags.Current, Math.Round(Current, 1));
         }
     }
 }

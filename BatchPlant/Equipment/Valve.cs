@@ -1,63 +1,68 @@
 using BatchPlant.Core;
-using Opc.Ua;
 
 namespace BatchPlant.Equipment
 {
     /// <summary>
+    /// Maps valve outputs to OPC UA tag names. Null entries are not published.
+    /// </summary>
+    public class ValveTagMap
+    {
+        /// <summary>For on/off valves: boolean open/closed indicator.</summary>
+        public string? Open { get; set; }
+        /// <summary>Continuous position 0-100% (for modulating valves, or as position feedback on on/off).</summary>
+        public string? Position { get; set; }
+        /// <summary>Position feedback with noise and deadband (separate instrument).</summary>
+        public string? Feedback { get; set; }
+    }
+
+    /// <summary>
     /// Valve model supporting both on/off (XV) and modulating (FCV/TCV) types.
-    /// Includes travel time, position feedback with noise, and seat wear.
+    /// Includes travel time and position feedback with noise.
     /// </summary>
     public class Valve : EquipmentBase
     {
         // Process values
-        public double CommandPosition { get; set; }    // 0-100% (or 0/100 for on/off)
-        public double ActualPosition { get; private set; } // 0-100% with travel time
-        public double FeedbackPosition { get; private set; } // Actual + noise + deadband
+        public double CommandPosition { get; set; }
+        public double ActualPosition { get; private set; }
+        public double FeedbackPosition { get; private set; }
 
         // Configuration
-        public double TravelTimeSeconds { get; set; } = 5.0; // Full stroke time
-        public bool IsOnOff { get; set; }                      // XV type (binary)
-        public double Deadband { get; set; } = 0.5;           // Position feedback deadband %
-        public double SeatLeakRate { get; set; }               // L/min leak when "closed"
+        public double TravelTimeSeconds { get; set; } = 5.0;
+        public bool IsOnOff { get; set; }
+        public double Deadband { get; set; } = 0.5;
 
-        // Tags
-        private string _tPos = "";
-        private string _tCmd = "";
-        private string _tFb = "";
+        /// <summary>True if valve is substantially open (>50% for modulating, >90% for on/off).</summary>
+        public bool IsOpen => IsOnOff ? ActualPosition > 90 : ActualPosition > 50;
+
+        /// <summary>True if valve is substantially closed.</summary>
+        public bool IsClosed => ActualPosition < 10;
+
+        private ValveTagMap _tags = new();
 
         public override int Priority => 30;
 
-        public Valve(PlantContext ctx, string tagPrefix) : base(ctx, tagPrefix)
+        public Valve(PlantContext ctx, string name) : base(ctx, name)
         {
-            SetTransitionDelays(TimeSpan.Zero, TimeSpan.Zero); // Valves don't use start/stop
-        }
-
-        public override void RegisterTags(string folderPath)
-        {
-            _tPos = $"{TagPrefix}_POS";
-            _tCmd = $"{TagPrefix}_CMD";
-            _tFb = $"{TagPrefix}_FB";
-
-            Ctx.Tags.Define(_tPos, BuiltInType.Double, folderPath, "%", $"{TagPrefix} Position");
-            Ctx.Tags.Define(_tCmd, BuiltInType.Double, folderPath, "%", $"{TagPrefix} Command", writable: true);
-            Ctx.Tags.Define(_tFb, BuiltInType.Double, folderPath, "%", $"{TagPrefix} Feedback Position");
+            SetTransitionDelays(TimeSpan.Zero, TimeSpan.Zero);
         }
 
         /// <summary>
-        /// Open the valve (on/off type).
+        /// Bind this valve's outputs to OPC UA tag names. Fluent.
         /// </summary>
+        public Valve Bind(ValveTagMap tags)
+        {
+            _tags = tags;
+            return this;
+        }
+
         public void Open() { CommandPosition = 100; }
-
-        /// <summary>
-        /// Close the valve (on/off type).
-        /// </summary>
         public void Close() { CommandPosition = 0; }
+        public void SetPosition(double percent) { CommandPosition = Math.Clamp(percent, 0, 100); }
 
         public override void Tick(TimeSpan dt, DateTime simNow)
         {
             if (State == EquipmentState.Faulted)
             {
-                // Stuck at current position when faulted
                 FeedbackPosition = Ctx.AddNoise(ActualPosition, 0.2);
                 WriteTags();
                 return;
@@ -71,11 +76,7 @@ namespace BatchPlant.Equipment
             ActualPosition += Math.Clamp(error, -maxTravel, maxTravel);
             ActualPosition = Math.Clamp(ActualPosition, 0, 100);
 
-            // Seat wear increases minimum leak
-            double wearLeak = RunHours / 20000.0; // Very gradual
-            SeatLeakRate = wearLeak;
-
-            // Feedback with noise and deadband
+            // Feedback with noise
             FeedbackPosition = ActualPosition;
             if (Math.Abs(error) > Deadband)
             {
@@ -83,7 +84,6 @@ namespace BatchPlant.Equipment
             }
             FeedbackPosition = Math.Clamp(FeedbackPosition, 0, 100);
 
-            // Track run hours when not fully closed
             if (ActualPosition > 1.0)
             {
                 RunHours += dt.TotalHours;
@@ -94,22 +94,19 @@ namespace BatchPlant.Equipment
 
         protected override void WriteTags()
         {
-            Ctx.Tags.Write(_tPos, Math.Round(ActualPosition, 1));
-            Ctx.Tags.Write(_tFb, Math.Round(FeedbackPosition, 1));
-        }
-
-        /// <summary>
-        /// Get the effective flow fraction (0.0-1.0) accounting for valve position.
-        /// </summary>
-        public double GetFlowFraction()
-        {
-            double frac = ActualPosition / 100.0;
-            // Add small leak when "closed" due to seat wear
-            if (frac < 0.01 && SeatLeakRate > 0)
+            if (_tags.Open != null)
             {
-                frac = SeatLeakRate * 0.001;
+                // For on/off valves expose as boolean
+                Ctx.Tags.Write(_tags.Open, IsOpen);
             }
-            return Math.Clamp(frac, 0, 1);
+            if (_tags.Position != null)
+            {
+                Ctx.Tags.Write(_tags.Position, Math.Round(ActualPosition, 1));
+            }
+            if (_tags.Feedback != null)
+            {
+                Ctx.Tags.Write(_tags.Feedback, Math.Round(FeedbackPosition, 1));
+            }
         }
     }
 }

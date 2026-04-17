@@ -1,53 +1,61 @@
 using BatchPlant.Core;
-using Opc.Ua;
 
 namespace BatchPlant.Equipment
 {
     /// <summary>
-    /// High-pressure homogenizer (e.g., APV Gaulin, GEA Niro Soavi).
-    /// 150-250 bar operating pressure. Valve wear causes gradual pressure loss.
-    /// Very high maintenance item - valve set replacement every 500-1000 run hours.
+    /// Maps homogenizer outputs to OPC UA tag names. Null entries are not published.
+    /// </summary>
+    public class HomogenizerTagMap
+    {
+        public string? Pressure { get; set; }
+        public string? Pressure2 { get; set; }
+        public string? Current { get; set; }
+        public string? Run { get; set; }
+        public string? Fault { get; set; }
+        public string? ValveHours { get; set; }
+    }
+
+    /// <summary>
+    /// High-pressure homogenizer (APV Gaulin, GEA Niro Soavi style).
+    /// Two-stage, 150-250 bar operating pressure. Valve set is a high-wear item that
+    /// causes gradual pressure decay — replace every ~1000 run hours.
     /// </summary>
     public class Homogenizer : EquipmentBase
     {
         // Process values
-        public double Pressure { get; private set; }         // bar (outlet)
-        public double PressureSetpoint { get; set; } = 200;  // bar
-        public double Current { get; private set; }          // A
-        public double FlowRate { get; private set; }         // L/min
-        public double ValveHours { get; private set; }       // Run hours on current valve set
+        public double Pressure { get; private set; }         // 1st stage (bar)
+        public double Pressure2 { get; private set; }        // 2nd stage (bar)
+        public double PressureSetpoint { get; set; } = 200;
+        public double Current { get; private set; }
+        public double FlowRate { get; private set; }
+        public double ValveHours { get; private set; }
 
         // Configuration
         public double MaxPressure { get; set; } = 250;
-        public double RatedCurrent { get; set; } = 50;      // A (large motor)
-        public double NominalFlow { get; set; } = 80;       // L/min
-        public double ValveWearRate { get; set; } = 0.02;   // bar loss per run hour
+        public double Stage2Fraction { get; set; } = 0.25;   // 2nd stage ~50 bar when 1st is 200
+        public double RatedCurrent { get; set; } = 50;
+        public double NominalFlow { get; set; } = 80;
+        public double ValveWearRate { get; set; } = 0.02;    // bar loss per run hour
 
-        // Tags
-        private string _tPress = "";
-        private string _tAmps = "";
-        private string _tRun = "";
-        private string _tFault = "";
-        private string _tValveHrs = "";
+        private HomogenizerTagMap _tags = new();
 
-        public Homogenizer(PlantContext ctx, string tagPrefix) : base(ctx, tagPrefix)
+        public Homogenizer(PlantContext ctx, string name) : base(ctx, name)
         {
             SetTransitionDelays(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(5));
         }
 
-        public override void RegisterTags(string folderPath)
+        public Homogenizer Bind(HomogenizerTagMap tags)
         {
-            _tPress = $"{TagPrefix}_PRESS";
-            _tAmps = $"{TagPrefix}_AMPS";
-            _tRun = $"{TagPrefix}_RUN";
-            _tFault = $"{TagPrefix}_FAULT";
-            _tValveHrs = $"{TagPrefix}_VLV_HRS";
+            _tags = tags;
+            return this;
+        }
 
-            Ctx.Tags.Define(_tPress, BuiltInType.Double, folderPath, "bar", $"{TagPrefix} Homogenizer Pressure");
-            Ctx.Tags.Define(_tAmps, BuiltInType.Double, folderPath, "A", $"{TagPrefix} Motor Current");
-            Ctx.Tags.Define(_tRun, BuiltInType.Boolean, folderPath, description: $"{TagPrefix} Running");
-            Ctx.Tags.Define(_tFault, BuiltInType.Boolean, folderPath, description: $"{TagPrefix} Fault");
-            Ctx.Tags.Define(_tValveHrs, BuiltInType.Double, folderPath, "hrs", $"{TagPrefix} Valve Run Hours");
+        /// <summary>
+        /// Reset valve hours after valve set replacement (maintenance).
+        /// </summary>
+        public void ReplaceValveSet()
+        {
+            ValveHours = 0;
         }
 
         protected override void UpdateRunning(TimeSpan dt, DateTime simNow)
@@ -55,17 +63,21 @@ namespace BatchPlant.Equipment
             double dtHours = dt.TotalHours;
             ValveHours += dtHours;
 
-            // Pressure decays with valve wear
+            // 1st stage pressure decays with valve wear
             double wearLoss = ValveHours * ValveWearRate;
             Pressure = PressureSetpoint - wearLoss;
-            Pressure = Math.Max(100, Pressure); // Can't drop below minimum
-            Pressure = Ctx.AddNoise(Pressure, 2.0); // ±2 bar fluctuation (reciprocating)
+            Pressure = Math.Max(100, Pressure);
+            Pressure = Ctx.AddNoise(Pressure, 2.0); // reciprocating piston noise
 
-            // Flow (relatively constant for PD homogenizer)
+            // 2nd stage pressure
+            Pressure2 = Pressure * Stage2Fraction;
+            Pressure2 = Ctx.AddNoise(Pressure2, 0.5);
+
+            // Flow is roughly constant for PD homogenizer
             FlowRate = NominalFlow;
             FlowRate = Ctx.AddNoise(FlowRate, 0.5);
 
-            // Current increases slightly with pressure
+            // Current scales with pressure
             double loadFrac = Pressure / MaxPressure;
             Current = RatedCurrent * loadFrac;
             Current = Ctx.AddNoise(Current, 0.5);
@@ -73,27 +85,20 @@ namespace BatchPlant.Equipment
 
         protected override void UpdateIdle(TimeSpan dt, DateTime simNow)
         {
-            Pressure = Ctx.AddNoise(0, 0.5);
-            Pressure = Math.Max(0, Pressure);
+            Pressure = Math.Max(0, Ctx.AddNoise(0, 0.5));
+            Pressure2 = 0;
             FlowRate = 0;
             Current = 0;
         }
 
-        /// <summary>
-        /// Reset valve hours after maintenance (valve set replacement).
-        /// </summary>
-        public void ReplaceValveSet()
-        {
-            ValveHours = 0;
-        }
-
         protected override void WriteTags()
         {
-            Ctx.Tags.Write(_tPress, Math.Round(Pressure, 1));
-            Ctx.Tags.Write(_tAmps, Math.Round(Current, 1));
-            Ctx.Tags.Write(_tRun, State == EquipmentState.Running);
-            Ctx.Tags.Write(_tFault, State == EquipmentState.Faulted);
-            Ctx.Tags.Write(_tValveHrs, Math.Round(ValveHours, 1));
+            if (_tags.Pressure != null) Ctx.Tags.Write(_tags.Pressure, Math.Round(Pressure, 1));
+            if (_tags.Pressure2 != null) Ctx.Tags.Write(_tags.Pressure2, Math.Round(Pressure2, 1));
+            if (_tags.Current != null) Ctx.Tags.Write(_tags.Current, Math.Round(Current, 1));
+            if (_tags.Run != null) Ctx.Tags.Write(_tags.Run, State == EquipmentState.Running);
+            if (_tags.Fault != null) Ctx.Tags.Write(_tags.Fault, State == EquipmentState.Faulted);
+            if (_tags.ValveHours != null) Ctx.Tags.Write(_tags.ValveHours, Math.Round(ValveHours, 2));
         }
     }
 }

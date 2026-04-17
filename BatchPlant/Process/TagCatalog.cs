@@ -129,6 +129,7 @@ namespace BatchPlant.Process
             // Mixer state
             tags.Define("MX201_STATE", BuiltInType.Int32, mx, description: "Mixer State (0=Idle,1=Dosing,2=Mixing,3=Discharging,4=Fault)", initialValue: 0);
             tags.Define("MX201_MODE", BuiltInType.Int32, mx, description: "Mixer Mode (0=Manual,1=Auto)", initialValue: 1);
+            tags.Define("MX201_BATCH_ID", BuiltInType.String, mx, description: "Batch ID currently in MX-201", initialValue: "");
         }
 
         private static void RegisterArea300(TagRegistry tags)
@@ -172,6 +173,7 @@ namespace BatchPlant.Process
             // Kettle state
             tags.Define("KT301_STATE", BuiltInType.Int32, kt, description: "Kettle State (0=Idle,1=Filling,2=Heating,3=HoldingTemp,4=Discharging,5=Fault)", initialValue: 0);
             tags.Define("KT301_HOLD_TMR", BuiltInType.Double, kt, "sec", "Pasteurization Hold Timer", 0.0);
+            tags.Define("KT301_BATCH_ID", BuiltInType.String, kt, description: "Batch ID currently in KT-301", initialValue: "");
         }
 
         private static void RegisterArea400(TagRegistry tags)
@@ -210,6 +212,10 @@ namespace BatchPlant.Process
             // Transfer pump
             tags.Define("401-P-001_STS", BuiltInType.Int32, da, description: "Transfer Pump Status", initialValue: 0);
             tags.Define("401-P-001_FLOW", BuiltInType.Double, da, "L/min", "Transfer Pump Flow", 0.0);
+            tags.Define("DA401_STATE", BuiltInType.Int32, da, description: "Deaerator State (0=Idle,1=Filling,2=PullingVacuum,3=Deaerating,4=Homogenizing,5=VentingVacuum,6=Draining)", initialValue: 0);
+
+            // Batch ID tags for genealogy (published by BatchManager)
+            tags.Define("DA401_BATCH_ID", BuiltInType.String, da, description: "Batch ID currently in DA-401", initialValue: "");
         }
 
         private static void RegisterArea450(TagRegistry tags)
