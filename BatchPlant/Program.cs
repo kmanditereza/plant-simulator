@@ -121,6 +121,11 @@ namespace BatchPlant
                 engine.Register(batchManager);
                 Console.WriteLine("[BATCH] BatchManager registered - observing Area 200/300/400, writing records to ./batch-records/");
 
+                // Power Metering - 5 meters at MCC level, one per work center
+                var powerMetering = new PowerMeteringController(ctx);
+                engine.Register(powerMetering);
+                Console.WriteLine("[POWER] Power metering registered (PM-PL1, PM-CIP, PM-PKG1, PM-UTIL, PM-RM)");
+
                 // Remaining areas: lightweight idle simulator until their controllers are built
                 var idleSim = new IdleSimulator(ctx);
                 engine.Register(idleSim);

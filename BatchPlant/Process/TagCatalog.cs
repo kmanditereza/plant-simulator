@@ -30,6 +30,7 @@ namespace BatchPlant.Process
             RegisterPlantStatus(tags);
             RegisterBatchLine(tags);
             RegisterPackLine(tags);
+            RegisterPowerMetering(tags);
         }
 
         private static void RegisterArea100(TagRegistry tags)
@@ -593,6 +594,45 @@ namespace BatchPlant.Process
             tags.Define("PACK_LINE_DOWNTIME_MIN", BuiltInType.Double, p, "min", "Packaging Line Downtime Today", 0.0);
             tags.Define("PACK_LINE_MICROSTOPS_TODAY", BuiltInType.Int32, p, description: "Micro-stops Today (<5 min)", initialValue: 0);
             tags.Define("PACK_LINE_MAJOR_STOPS_TODAY", BuiltInType.Int32, p, description: "Major Stops Today (>5 min)", initialValue: 0);
+        }
+
+        private static void RegisterPowerMetering(TagRegistry tags)
+        {
+            // === POWER METERING: Schneider PM5xxx series on Modbus-to-OPC gateway ===
+            // Consistent naming (single vendor gateway), organized by MCC feed / work center.
+
+            RegisterMeter(tags, "PowerMetering/PM-PL1", "PM_PL1",
+                "Production Line 1 (PreMix, Cooking, Processing, Buffer)");
+            RegisterMeter(tags, "PowerMetering/PM-CIP", "PM_CIP",
+                "Production CIP");
+            RegisterMeter(tags, "PowerMetering/PM-PKG1", "PM_PKG1",
+                "Packaging Line 1 (Filling, Packaging)");
+            RegisterMeter(tags, "PowerMetering/PM-UTIL", "PM_UTIL",
+                "Utilities (Steam, Cooling, Compressed Air)");
+            RegisterMeter(tags, "PowerMetering/PM-RM", "PM_RM",
+                "Raw Materials Storage");
+        }
+
+        private static void RegisterMeter(TagRegistry tags, string folder, string prefix, string desc)
+        {
+            tags.Define($"{prefix}_kW", BuiltInType.Double, folder, "kW",
+                $"{desc} Active Power", 0.0);
+            tags.Define($"{prefix}_kWh", BuiltInType.Double, folder, "kWh",
+                $"{desc} Active Energy (cumulative)", 0.0);
+            tags.Define($"{prefix}_kVAR", BuiltInType.Double, folder, "kVAR",
+                $"{desc} Reactive Power", 0.0);
+            tags.Define($"{prefix}_PF", BuiltInType.Double, folder, "",
+                $"{desc} Power Factor", 0.0);
+            tags.Define($"{prefix}_V_LL", BuiltInType.Double, folder, "V",
+                $"{desc} Voltage Line-to-Line Avg", 480.0);
+            tags.Define($"{prefix}_I_Avg", BuiltInType.Double, folder, "A",
+                $"{desc} Current 3-Phase Avg", 0.0);
+            tags.Define($"{prefix}_Freq", BuiltInType.Double, folder, "Hz",
+                $"{desc} Grid Frequency", 60.0);
+            tags.Define($"{prefix}_THD_I", BuiltInType.Double, folder, "%",
+                $"{desc} Current THD", 0.0);
+            tags.Define($"{prefix}_V_Unbal", BuiltInType.Double, folder, "%",
+                $"{desc} Voltage Unbalance", 0.0);
         }
     }
 }
