@@ -20,6 +20,20 @@ namespace BatchPlant.Api
         public string CustomerId { get; set; } = "";
         public string CustomerName { get; set; } = "";
 
+        // ISA-95 context
+        public string Enterprise { get; set; } = "";
+        public string Site { get; set; } = "";
+        public string Area { get; set; } = "";
+        public string ProcessCell { get; set; } = "";
+
+        // Master recipe reference
+        public string MasterRecipeId { get; set; } = "";
+        public string MasterRecipeVersion { get; set; } = "";
+
+        // Scheduling
+        public DateTime? ScheduledAt { get; set; }
+        public string BatchRecordId { get; set; } = "";
+
         // Equipment binding
         public string PreMixUnit { get; set; } = "MX-201";
         public string CookUnit { get; set; } = "KT-301";

@@ -500,6 +500,14 @@ namespace BatchPlant.Process
             tags.Define("BATCH_START", BuiltInType.Boolean, p, description: "Batch Start Command", writable: true);
             tags.Define("BATCH_HOLD", BuiltInType.Boolean, p, description: "Batch Hold Command", writable: true);
             tags.Define("BATCH_ABORT", BuiltInType.Boolean, p, description: "Batch Abort Command", writable: true);
+            tags.Define("WO_ACTIVATED", BuiltInType.Boolean, p, description: "Work Order Activated flag - true when batch execution begins, reset via POST /api/work-order/activated/ack", writable: true);
+            tags.Define("BATCH_SCHEDULED", BuiltInType.Boolean, p, description: "Batch Scheduled flag - true when work order is queued, reset via POST /api/batch/scheduled/ack", writable: true);
+            tags.Define("BATCH_STARTED", BuiltInType.Boolean, p, description: "Batch Started flag - true when batch execution begins, reset via POST /api/batch/started/ack", writable: true);
+            tags.Define("PHASE_STARTED", BuiltInType.Boolean, p, description: "Phase Started flag - true when a new phase begins, reset via POST /api/batch/phase-started/ack", writable: true);
+            tags.Define("PHASE_COMPLETED", BuiltInType.Boolean, p, description: "Phase Completed flag - true when a phase finishes, reset via POST /api/batch/phase-completed/ack", writable: true);
+            tags.Define("BATCH_COMPLETED", BuiltInType.Boolean, p, description: "Batch Completed flag - true when batch finishes, reset via POST /api/batch/completed/ack", writable: true);
+            tags.Define("WO_COMPLETED", BuiltInType.Boolean, p, description: "Work Order Completed flag - true when batch finishes, reset via POST /api/work-order/completed/ack", writable: true);
+            tags.Define("BATCH_RELEASED", BuiltInType.Boolean, p, description: "Batch Released flag - true when batch is QA released, reset via POST /api/batch/released/ack", writable: true);
             tags.Define("BATCH_ID", BuiltInType.String, p, description: "Current Batch ID", initialValue: "");
             tags.Define("BATCH_STATUS", BuiltInType.String, p, description: "Batch Status", initialValue: "IDLE");
             tags.Define("BATCH_PHASE", BuiltInType.String, p, description: "Current Batch Phase", initialValue: "");

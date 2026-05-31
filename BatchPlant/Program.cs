@@ -145,7 +145,8 @@ namespace BatchPlant
                 if (!string.IsNullOrEmpty(apiPortEnv) && int.TryParse(apiPortEnv, out var parsedPort))
                     apiPort = parsedPort;
 
-                var apiServer = new ApiServer(workOrderQueue);
+                var apiServer = new ApiServer(workOrderQueue, tags);
+                batchManager.ConnectApiServer(apiServer);
                 var builder = WebApplication.CreateBuilder();
                 builder.WebHost.UseUrls($"http://0.0.0.0:{apiPort}");
                 builder.Logging.ClearProviders(); // don't pollute console with ASP.NET logs

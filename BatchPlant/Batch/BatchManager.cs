@@ -27,6 +27,7 @@ namespace BatchPlant.Batch
         private readonly PlantContext _ctx;
         private readonly string _outputDir;
         private Func<BatchInstruction?>? _getActiveInstruction;
+        private ApiServer? _apiServer;
 
         public int Priority => 50; // after area controllers, before tag flusher
 
@@ -115,6 +116,14 @@ namespace BatchPlant.Batch
             _getActiveInstruction = getActiveInstruction;
         }
 
+        /// <summary>
+        /// Connect to the API server so we can publish WorkOrderActivated events.
+        /// </summary>
+        public void ConnectApiServer(ApiServer server)
+        {
+            _apiServer = server;
+        }
+
         public void Tick(TimeSpan dt, DateTime simNow)
         {
             // Reset daily counter on date rollover
@@ -160,6 +169,14 @@ namespace BatchPlant.Batch
                 if (_byArea.TryGetValue(areaName, out var batch))
                 {
                     batch.Record.Phases.Add(finalized);
+
+                    // Emit BatchPhaseCompleted event
+                    var instruction = _getActiveInstruction?.Invoke();
+                    if (instruction != null && _apiServer != null)
+                    {
+                        _ctx.Tags.Write("PHASE_COMPLETED", true);
+                        _apiServer.SetPhaseCompletedEvent(instruction, finalized, simNow);
+                    }
                 }
                 _phaseTrackers.Remove(priorKey);
             }
@@ -244,6 +261,17 @@ namespace BatchPlant.Batch
                 var tracker = new ActivePhaseTracker(obs, simNow);
                 tracker.RecordEntrySnapshot(ReadTagAsDouble);
                 _phaseTrackers[$"{areaName}|{newName}"] = tracker;
+
+                // Emit BatchPhaseStarted event
+                var instruction = _getActiveInstruction?.Invoke();
+                if (instruction != null && _apiServer != null)
+                {
+                    _ctx.Tags.Write("PHASE_STARTED", true);
+                    _apiServer.SetPhaseStartedEvent(
+                        instruction, obs.PhaseLabel, obs.UnitName,
+                        tracker.Record.ReportParameters.ToDictionary(kv => kv.Key, kv => kv.Value),
+                        simNow);
+                }
             }
         }
 
@@ -273,12 +301,28 @@ namespace BatchPlant.Batch
                 CurrentStage = BatchStage.PreMixing
             };
 
-            var batch = new ActiveBatch { Record = record };
+            var batch = new ActiveBatch { Record = record, Instruction = instruction };
 
             if (!string.IsNullOrEmpty(workOrderId))
+            {
                 Console.WriteLine($"[{simNow:HH:mm:ss}] [BATCH] {batchId}: START (stage=PreMixing, workOrder={workOrderId})");
+
+                // Set event tags and publish events
+                if (instruction != null && _apiServer != null)
+                {
+                    string shift = _ctx.Clock.CurrentShift.ToString();
+                    _ctx.Tags.Write("WO_ACTIVATED", true);
+                    _ctx.Tags.Write("BATCH_STARTED", true);
+                    _apiServer.ResetPhaseSequence();
+                    _apiServer.SetActivatedEvent(instruction, simNow, shift);
+                    _apiServer.SetBatchStartedEvent(instruction, simNow, shift);
+                    Console.WriteLine($"[{simNow:HH:mm:ss}] [BATCH] WO_ACTIVATED=true, BATCH_STARTED=true");
+                }
+            }
             else
+            {
                 Console.WriteLine($"[{simNow:HH:mm:ss}] [BATCH] {batchId}: START (stage=PreMixing)");
+            }
 
             return batch;
         }
@@ -355,6 +399,18 @@ namespace BatchPlant.Batch
             WriteBatchRecord(batch.Record);
             Console.WriteLine($"[{simNow:HH:mm:ss}] [BATCH] {batch.Record.BatchId}: COMPLETE " +
                               $"(duration={batch.Record.TotalDurationSec / 60:F1}min, phases={batch.Record.Phases.Count})");
+
+            // Emit completion events
+            if (batch.Instruction != null && _apiServer != null)
+            {
+                _ctx.Tags.Write("BATCH_COMPLETED", true);
+                _ctx.Tags.Write("WO_COMPLETED", true);
+                _ctx.Tags.Write("BATCH_RELEASED", true);
+                _apiServer.SetBatchCompletedEvent(batch.Instruction, batch.Record, simNow);
+                _apiServer.SetWorkOrderCompletedEvent(batch.Instruction, batch.Record, simNow);
+                _apiServer.SetBatchReleasedEvent(batch.Instruction, batch.Record, simNow);
+                Console.WriteLine($"[{simNow:HH:mm:ss}] [BATCH] BATCH_COMPLETED=true, WO_COMPLETED=true, BATCH_RELEASED=true");
+            }
         }
 
         private void WriteBatchRecord(BatchRecord record)
@@ -399,5 +455,6 @@ namespace BatchPlant.Batch
     public class ActiveBatch
     {
         public BatchRecord Record { get; set; } = null!;
+        public BatchInstruction? Instruction { get; set; }
     }
 }
