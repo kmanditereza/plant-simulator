@@ -1,4 +1,5 @@
 using System.Text.Json;
+using BatchPlant.Api;
 using BatchPlant.Core;
 using BatchPlant.OpcUa;
 
@@ -25,6 +26,7 @@ namespace BatchPlant.Batch
     {
         private readonly PlantContext _ctx;
         private readonly string _outputDir;
+        private Func<BatchInstruction?>? _getActiveInstruction;
 
         public int Priority => 50; // after area controllers, before tag flusher
 
@@ -102,6 +104,15 @@ namespace BatchPlant.Batch
             {
                 Console.WriteLine($"[BATCH] Warning: could not create output dir {_outputDir}: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Connect to the Area 200 controller's active instruction so we can use
+        /// the work-order-assigned batch ID instead of auto-generating one.
+        /// </summary>
+        public void ConnectInstructionSource(Func<BatchInstruction?> getActiveInstruction)
+        {
+            _getActiveInstruction = getActiveInstruction;
         }
 
         public void Tick(TimeSpan dt, DateTime simNow)
@@ -238,8 +249,21 @@ namespace BatchPlant.Batch
 
         private ActiveBatch StartNewBatch(DateTime simNow)
         {
-            _batchCounterForDate++;
-            string batchId = $"B-{simNow:yyyyMMdd}-{_batchCounterForDate:D3}";
+            // Use work-order-assigned batch ID if available, otherwise auto-generate
+            var instruction = _getActiveInstruction?.Invoke();
+            string batchId;
+            string workOrderId = "";
+
+            if (instruction != null && !string.IsNullOrEmpty(instruction.BatchId))
+            {
+                batchId = instruction.BatchId;
+                workOrderId = instruction.WorkOrderId;
+            }
+            else
+            {
+                _batchCounterForDate++;
+                batchId = $"B-{simNow:yyyyMMdd}-{_batchCounterForDate:D3}";
+            }
 
             var record = new BatchRecord
             {
@@ -250,7 +274,12 @@ namespace BatchPlant.Batch
             };
 
             var batch = new ActiveBatch { Record = record };
-            Console.WriteLine($"[{simNow:HH:mm:ss}] [BATCH] {batchId}: START (stage=PreMixing)");
+
+            if (!string.IsNullOrEmpty(workOrderId))
+                Console.WriteLine($"[{simNow:HH:mm:ss}] [BATCH] {batchId}: START (stage=PreMixing, workOrder={workOrderId})");
+            else
+                Console.WriteLine($"[{simNow:HH:mm:ss}] [BATCH] {batchId}: START (stage=PreMixing)");
+
             return batch;
         }
 

@@ -123,7 +123,7 @@ namespace BatchPlant.OpcUa
                 UserAccessLevel = tag.Writable ? AccessLevels.CurrentReadOrWrite : AccessLevels.CurrentRead,
                 Historizing = false,
                 Value = tag.InitialValue ?? GetDefaultValue(tag.DataType),
-                StatusCode = StatusCodes.Good,
+                StatusCode = Opc.Ua.StatusCodes.Good,
                 Timestamp = DateTime.UtcNow
             };
 

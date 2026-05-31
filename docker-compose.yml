@@ -6,6 +6,8 @@ services:
     container_name: batchplant-v2
     ports:
       - "26543:26543"
+      - "5050:5050"
     environment:
       - SIM_SPEED=60
+      - API_PORT=5050
     restart: unless-stopped

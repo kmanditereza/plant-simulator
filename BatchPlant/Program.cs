@@ -1,5 +1,6 @@
 using Opc.Ua;
 using Opc.Ua.Configuration;
+using BatchPlant.Api;
 using BatchPlant.Core;
 using BatchPlant.OpcUa;
 using BatchPlant.Process;
@@ -81,8 +82,12 @@ namespace BatchPlant
                 engine.Register(area100);
                 Console.WriteLine("[AREA100] Raw Materials controller registered (paste tanks, vinegar, silos, P-101/102)");
 
+                // Work Order Queue - receives instructions from HTTP API
+                var workOrderQueue = new WorkOrderQueue();
+
                 // Area 200: Pre-Mix (depends on Area 100 for ingredients, IProductSource for Area 300)
                 var area200 = new Area200_PreMixController(ctx, area100);
+                area200.ConnectWorkOrderQueue(workOrderQueue);
                 engine.Register(area200);
                 Console.WriteLine("[AREA200] Pre-Mix controller registered (MX-201, AGIT-201, XV-201..204, FCV-201)");
 
@@ -118,6 +123,7 @@ namespace BatchPlant
 
                 // Batch Manager - observes state transitions, assigns Batch IDs, collects report parameters
                 var batchManager = new BatchManager(ctx);
+                batchManager.ConnectInstructionSource(() => area200.ActiveInstruction);
                 engine.Register(batchManager);
                 Console.WriteLine("[BATCH] BatchManager registered - observing Area 200/300/400, writing records to ./batch-records/");
 
@@ -133,6 +139,25 @@ namespace BatchPlant
                 // 5. Start the simulation engine
                 engine.Start();
 
+                // 6. Start HTTP API server for work order dispatch
+                int apiPort = 5000;
+                var apiPortEnv = Environment.GetEnvironmentVariable("API_PORT");
+                if (!string.IsNullOrEmpty(apiPortEnv) && int.TryParse(apiPortEnv, out var parsedPort))
+                    apiPort = parsedPort;
+
+                var apiServer = new ApiServer(workOrderQueue);
+                var builder = WebApplication.CreateBuilder();
+                builder.WebHost.UseUrls($"http://0.0.0.0:{apiPort}");
+                builder.Logging.ClearProviders(); // don't pollute console with ASP.NET logs
+                var webapp = builder.Build();
+                apiServer.MapEndpoints(webapp);
+                _ = webapp.RunAsync(); // fire and forget — runs alongside OPC UA
+
+                Console.WriteLine($"[API] HTTP API started on port {apiPort}");
+                Console.WriteLine($"[API]   POST /api/control-recipe  - Download control recipe");
+                Console.WriteLine($"[API]   POST /api/work-order      - Dispatch work order");
+                Console.WriteLine($"[API]   GET  /api/status          - Queue and batch status");
+
                 // Write initial sim metadata
                 tags.Write("SIM_SPEED", simSpeed);
                 tags.Write("SIM_TIME", clock.Now);
@@ -142,6 +167,7 @@ namespace BatchPlant
                 Console.WriteLine("═══════════════════════════════════════════════════════════════");
                 Console.WriteLine("  Server is running. Connect with any OPC UA client to:");
                 Console.WriteLine("  opc.tcp://localhost:26543/BatchPlantServer");
+                Console.WriteLine($"  HTTP API: http://localhost:{apiPort}/api/status");
                 Console.WriteLine("  Press Ctrl+C to exit.");
                 Console.WriteLine("═══════════════════════════════════════════════════════════════");
                 Console.WriteLine();

@@ -124,7 +124,7 @@ namespace BatchPlant.OpcUa
                     {
                         node.Value = kvp.Value;
                         node.Timestamp = DateTime.UtcNow;
-                        node.StatusCode = StatusCodes.Good;
+                        node.StatusCode = Opc.Ua.StatusCodes.Good;
                         node.ClearChangeMasks(_systemContext, false);
                     }
                 }

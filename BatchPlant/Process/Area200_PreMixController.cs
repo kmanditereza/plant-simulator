@@ -1,3 +1,4 @@
+using BatchPlant.Api;
 using BatchPlant.Core;
 using BatchPlant.Equipment;
 
@@ -48,15 +49,21 @@ namespace BatchPlant.Process
         private const double PasteFlowKgPerMin = 80;
         private const double VinegarFlowLpm = 60;
 
-        // Targets (volumes for liquid phase dosing)
-        private const double WaterTargetL = 630;
-        private const double PasteTargetKg = 945;
-        private const double VinegarTargetL = 378;
+        // Targets — defaults used in auto mode, overridden by work order instructions
+        private double _waterTargetL = 630;
+        private double _pasteTargetKg = 945;
+        private double _vinegarTargetL = 378;
+        private double _mixSpeedRpm = 1450;
+        private double _mixDurationSec = 180;
 
         // Accumulated doses (reset on each cycle start)
         private double _pasteDosedKg;
         private double _waterDosedL;
         private double _vinegarDosedL;
+
+        // Work order integration
+        private WorkOrderQueue? _workOrderQueue;
+        private BatchInstruction? _activeInstruction;
 
         public Area200_PreMixController(PlantContext ctx, Area100_RawMaterialsController rawMaterials)
         {
@@ -109,6 +116,19 @@ namespace BatchPlant.Process
             FlowControl = new Valve(ctx, "FCV-201") { IsOnOff = false, TravelTimeSeconds = 5.0 }
                 .Bind(new ValveTagMap { Position = "FCV-201" });
         }
+
+        /// <summary>
+        /// Connect to the work order queue. When connected and queue has items,
+        /// the controller uses instruction parameters instead of defaults.
+        /// When queue is empty and no instruction has ever been received, falls back to auto mode.
+        /// </summary>
+        public void ConnectWorkOrderQueue(WorkOrderQueue queue)
+        {
+            _workOrderQueue = queue;
+        }
+
+        /// <summary>The currently executing instruction, if started via work order.</summary>
+        public BatchInstruction? ActiveInstruction => _activeInstruction;
 
         // ---- IProductSource implementation - available only during Discharging ----
 
@@ -199,18 +219,31 @@ namespace BatchPlant.Process
             switch (_cycle)
             {
                 case CycleState.Idle:
-                    if (elapsed.TotalSeconds >= 20)
+                    if (_workOrderQueue != null)
                     {
-                        _pasteDosedKg = 0;
-                        _waterDosedL = 0;
-                        _vinegarDosedL = 0;
-                        Transition(CycleState.FillingWater, simNow);
+                        var instruction = _workOrderQueue.TryDequeue();
+                        if (instruction == null)
+                            break; // wait for work order
+
+                        _activeInstruction = instruction;
+                        _activeInstruction.StartedAt = simNow;
+                        LoadInstructionParameters(instruction);
+                        Console.WriteLine($"[{simNow:HH:mm:ss}] Area 200: Starting from work order {instruction.WorkOrderId} (batch={instruction.BatchId})");
                     }
+                    else if (elapsed.TotalSeconds < 20)
+                    {
+                        break; // no queue connected, wait 20s (legacy fallback)
+                    }
+
+                    _pasteDosedKg = 0;
+                    _waterDosedL = 0;
+                    _vinegarDosedL = 0;
+                    Transition(CycleState.FillingWater, simNow);
                     break;
 
                 case CycleState.FillingWater:
                     WaterInlet.Open();
-                    if (_waterDosedL >= WaterTargetL)
+                    if (_waterDosedL >= _waterTargetL)
                     {
                         WaterInlet.Close();
                         Transition(CycleState.DosingPaste, simNow);
@@ -219,7 +252,7 @@ namespace BatchPlant.Process
 
                 case CycleState.DosingPaste:
                     PasteInlet.Open();
-                    if (_pasteDosedKg >= PasteTargetKg)
+                    if (_pasteDosedKg >= _pasteTargetKg)
                     {
                         PasteInlet.Close();
                         Transition(CycleState.DosingVinegar, simNow);
@@ -228,7 +261,7 @@ namespace BatchPlant.Process
 
                 case CycleState.DosingVinegar:
                     VinegarInlet.Open();
-                    if (_vinegarDosedL >= VinegarTargetL)
+                    if (_vinegarDosedL >= _vinegarTargetL)
                     {
                         VinegarInlet.Close();
                         Transition(CycleState.RampingAgitator, simNow);
@@ -236,19 +269,19 @@ namespace BatchPlant.Process
                     break;
 
                 case CycleState.RampingAgitator:
-                    Agitator.SpeedSetpoint = 1500;
+                    Agitator.SpeedSetpoint = _mixSpeedRpm + 50; // setpoint slightly above target
                     if (Agitator.State != EquipmentState.Running && Agitator.State != EquipmentState.Starting)
                     {
                         Agitator.Start();
                     }
-                    if (Agitator.Speed >= 1450)
+                    if (Agitator.Speed >= _mixSpeedRpm)
                     {
                         Transition(CycleState.Mixing, simNow);
                     }
                     break;
 
                 case CycleState.Mixing:
-                    if (elapsed.TotalMinutes >= 3)
+                    if (elapsed.TotalSeconds >= _mixDurationSec)
                     {
                         Transition(CycleState.RampingDown, simNow);
                     }
@@ -281,6 +314,22 @@ namespace BatchPlant.Process
             Console.WriteLine($"[{simNow:HH:mm:ss}] Area 200 Pre-Mix: {_cycle} -> {next} (mixer={Mixer.Level:F0}L)");
             _cycle = next;
             _cycleEntered = simNow;
+
+            // When cycle completes (returns to Idle), clear the active instruction
+            if (next == CycleState.Idle && _activeInstruction != null)
+            {
+                _activeInstruction = null;
+            }
+        }
+
+        private void LoadInstructionParameters(BatchInstruction instr)
+        {
+            // Convert kg to liters where needed (water density ~1.0, vinegar ~1.0)
+            _waterTargetL = instr.WaterTargetKg; // kg ≈ L for water
+            _pasteTargetKg = instr.PasteTargetKg;
+            _vinegarTargetL = instr.VinegarTargetKg; // kg ≈ L for vinegar
+            _mixSpeedRpm = instr.MixSpeedRpm;
+            _mixDurationSec = instr.MixDurationSec;
         }
     }
 }
