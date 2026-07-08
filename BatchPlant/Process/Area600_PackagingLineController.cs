@@ -1,4 +1,5 @@
 using BatchPlant.Core;
+using BatchPlant.Equipment;
 using BatchPlant.OpcUa;
 
 namespace BatchPlant.Process
@@ -48,10 +49,30 @@ namespace BatchPlant.Process
         private int _casesToday;
         private int _palletsToday;
 
+        // Per-shift good/scrap tracking: baselines captured at each shift change so the
+        // published counts reflect only the current shift's production.
+        private ShiftType _lastShift;
+        private bool _shiftInit;
+        private long _shiftGoodBaseline;
+        private long _shiftScrapBaseline;
+
+        // Condition monitoring: labeler drive (rotating), case packer & palletizer (rotating + hydraulic)
+        private readonly ConditionMonitor _cmLabeler;
+        private readonly ConditionMonitor _cmCasePacker;
+        private readonly ConditionMonitor _cmPalletizer;
+
         public Area600_PackagingLineController(PlantContext ctx, Area500_FillingLineController fillingLine)
         {
             _ctx = ctx;
             _fillingLine = fillingLine;
+
+            _cmLabeler = new ConditionMonitor(ctx) { BaseVibration = 1.4, BearingRise = 28 };
+            _cmLabeler.SeedHours(350);
+            // Hydraulic case packer / palletizer: HPU pressure ~120 bar, lube + return filter.
+            _cmCasePacker = new ConditionMonitor(ctx) { BaseVibration = 2.0, BearingRise = 32, HydNominalPressure = 120, HydFullTemp = 48, FilterDpClean = 0.25 };
+            _cmCasePacker.SeedHours(300);
+            _cmPalletizer = new ConditionMonitor(ctx) { BaseVibration = 2.4, BearingRise = 35, HydNominalPressure = 140, HydFullTemp = 52, FilterDpClean = 0.30 };
+            _cmPalletizer.SeedHours(450);
         }
 
         public int Priority_Alt => 41;
@@ -164,6 +185,22 @@ namespace BatchPlant.Process
             t.Write("PAL_601_PALLETS_CNT", _palletCount);
             t.Write("PAL_601_FAULT", false);
 
+            // ---- Condition monitoring for packaging machine drives ----
+            bool running = stateEnum == OperationalState.Running;
+            double packLoad = Math.Clamp(_ctx.Tags.Read<double>("PACK_LINE_SPEED") / 200.0, 0, 1.2);
+            double dtSec = dt.TotalSeconds;
+
+            _cmLabeler.Update(running, packLoad, false, dtSec);
+            _cmLabeler.Publish(t, vibration: "LBL_601_VIB", bearingTemp: "LBL_601_BRGTEMP", mcsa: "LBL_601_MCSA", failureCount: "LBL_601_FAILCNT");
+
+            _cmCasePacker.Update(running, packLoad, false, dtSec);
+            _cmCasePacker.Publish(t, vibration: "CP_601_VIB", bearingTemp: "CP_601_BRGTEMP", mcsa: "CP_601_MCSA", failureCount: "CP_601_FAILCNT",
+                hydPressure: "CP_601_HYD_PRESS", hydTemp: "CP_601_HYD_TEMP", filterDp: "CP_601_FILTER_DP", oilQuality: "CP_601_OIL_QUAL");
+
+            _cmPalletizer.Update(running, packLoad, false, dtSec);
+            _cmPalletizer.Publish(t, vibration: "PAL_601_VIB", bearingTemp: "PAL_601_BRGTEMP", mcsa: "PAL_601_MCSA", failureCount: "PAL_601_FAILCNT",
+                hydPressure: "PAL_601_HYD_PRESS", hydTemp: "PAL_601_HYD_TEMP", filterDp: "PAL_601_FILTER_DP", oilQuality: "PAL_601_OIL_QUAL");
+
             // Station-level PackML state/mode (all stations mirror the line)
             double stateDur = _ctx.Tags.Read<double>("PACK_LINE_MODE_DUR"); // shortcut
             PublishStationPackML("LBL_601", stateEnum, OperationalMode.Production, stateDur, stateDur);
@@ -175,6 +212,29 @@ namespace BatchPlant.Process
             // PackLine aggregates (counters owned by Area 600)
             t.Write("CASES_TODAY", _casesToday);
             t.Write("PALLETS_TODAY", _palletsToday);
+
+            // Line-global good/scrap unit counts. Scrap = filler weight rejects (Area 500)
+            // + all downstream rejects (labeler, X-ray, metal detector). A unit is only
+            // "good" once it clears every station on the line.
+            long fillerGood = _fillingLine.Filler.GoodCount;
+            long fillerReject = _fillingLine.Filler.RejectCount;
+            long downstreamReject = _labelRejectCount + _xrayReject + _metalDetectTrips;
+            long lineScrap = fillerReject + downstreamReject;
+            long lineGood = Math.Max(0, fillerGood - downstreamReject);
+
+            // Rebase good/scrap at each shift change so the published counts are per-shift.
+            ShiftType shift = _ctx.Clock.CurrentShift;
+            if (!_shiftInit || shift != _lastShift)
+            {
+                _shiftInit = true;
+                _lastShift = shift;
+                _shiftGoodBaseline = lineGood;
+                _shiftScrapBaseline = lineScrap;
+            }
+            long shiftGood = Math.Max(0, lineGood - _shiftGoodBaseline);
+            long shiftScrap = Math.Max(0, lineScrap - _shiftScrapBaseline);
+            t.Write("PACK_LINE_GOOD_UNITS_SHIFT", (int)shiftGood);
+            t.Write("PACK_LINE_SCRAP_UNITS_SHIFT", (int)shiftScrap);
 
             // Plant total production (across both lines - for now just packaging)
             t.Write("PLANT_TOTAL_PRODUCTION_TODAY", _casesToday);

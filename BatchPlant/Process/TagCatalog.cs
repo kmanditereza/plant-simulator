@@ -88,6 +88,32 @@ namespace BatchPlant.Process
             tags.Define("H2O_TEMP", BuiltInType.Double, ws, "degC", "Water Temperature", 15.0);
             tags.Define("H2O_VLV_STS", BuiltInType.Boolean, ws, description: "Water Valve Open");
             tags.Define("H2O_TOTALIZER", BuiltInType.Double, ws, "L", "Water Totalizer", 0.0);
+
+            // --- Condition monitoring / predictive maintenance ---
+            // Paste Pump 101
+            tags.Define("P101_FAULT", BuiltInType.Boolean, pt1, description: "Pump 101 Fault");
+            tags.Define("P101_FAILCNT", BuiltInType.Int32, pt1, description: "Pump 101 Cumulative Failure Count", initialValue: 0);
+            tags.Define("P101_VIB", BuiltInType.Double, pt1, "mm/s", "Pump 101 Vibration (RMS)", 0.0);
+            tags.Define("P101_BRGTEMP", BuiltInType.Double, pt1, "degC", "Pump 101 Bearing Temperature", 25.0);
+            tags.Define("P101_MCSA", BuiltInType.Double, pt1, "%", "Pump 101 Motor Current Signature Index", 0.0);
+            // Paste Pump 102
+            tags.Define("P102_FAULT", BuiltInType.Boolean, pt2, description: "Pump 102 Fault");
+            tags.Define("P102_FAILCNT", BuiltInType.Int32, pt2, description: "Pump 102 Cumulative Failure Count", initialValue: 0);
+            tags.Define("P102_VIB", BuiltInType.Double, pt2, "mm/s", "Pump 102 Vibration (RMS)", 0.0);
+            tags.Define("P102_BRGTEMP", BuiltInType.Double, pt2, "degC", "Pump 102 Bearing Temperature", 25.0);
+            tags.Define("P102_MCSA", BuiltInType.Double, pt2, "%", "Pump 102 Motor Current Signature Index", 0.0);
+            // Sugar feeder drive
+            tags.Define("SUGAR_FEEDER_FAULT", BuiltInType.Boolean, ss, description: "Sugar Feeder Fault");
+            tags.Define("SUGAR_FEEDER_FAILCNT", BuiltInType.Int32, ss, description: "Sugar Feeder Cumulative Failure Count", initialValue: 0);
+            tags.Define("SUGAR_FEEDER_VIB", BuiltInType.Double, ss, "mm/s", "Sugar Feeder Vibration (RMS)", 0.0);
+            tags.Define("SUGAR_FEEDER_BRGTEMP", BuiltInType.Double, ss, "degC", "Sugar Feeder Bearing Temperature", 25.0);
+            tags.Define("SUGAR_FEEDER_MCSA", BuiltInType.Double, ss, "%", "Sugar Feeder Motor Current Signature Index", 0.0);
+            // Salt feeder drive
+            tags.Define("SALT_FEEDER_FAULT", BuiltInType.Boolean, sb, description: "Salt Feeder Fault");
+            tags.Define("SALT_FEEDER_FAILCNT", BuiltInType.Int32, sb, description: "Salt Feeder Cumulative Failure Count", initialValue: 0);
+            tags.Define("SALT_FEEDER_VIB", BuiltInType.Double, sb, "mm/s", "Salt Feeder Vibration (RMS)", 0.0);
+            tags.Define("SALT_FEEDER_BRGTEMP", BuiltInType.Double, sb, "degC", "Salt Feeder Bearing Temperature", 25.0);
+            tags.Define("SALT_FEEDER_MCSA", BuiltInType.Double, sb, "%", "Salt Feeder Motor Current Signature Index", 0.0);
         }
 
         private static void RegisterArea200(TagRegistry tags)
@@ -131,6 +157,11 @@ namespace BatchPlant.Process
             tags.Define("MX201_STATE", BuiltInType.Int32, mx, description: "Mixer State (0=Idle,1=Dosing,2=Mixing,3=Discharging,4=Fault)", initialValue: 0);
             tags.Define("MX201_MODE", BuiltInType.Int32, mx, description: "Mixer Mode (0=Manual,1=Auto)", initialValue: 1);
             tags.Define("MX201_BATCH_ID", BuiltInType.String, mx, description: "Batch ID currently in MX-201", initialValue: "");
+
+            // --- Condition monitoring / predictive maintenance (AGIT-201; VIB & FAULT defined above) ---
+            tags.Define("AGIT201_BRGTEMP", BuiltInType.Double, mx, "degC", "Agitator Bearing Temperature", 22.0);
+            tags.Define("AGIT201_MCSA", BuiltInType.Double, mx, "%", "Agitator Motor Current Signature Index", 0.0);
+            tags.Define("AGIT201_FAILCNT", BuiltInType.Int32, mx, description: "Agitator Cumulative Failure Count", initialValue: 0);
         }
 
         private static void RegisterArea300(TagRegistry tags)
@@ -175,6 +206,13 @@ namespace BatchPlant.Process
             tags.Define("KT301_STATE", BuiltInType.Int32, kt, description: "Kettle State (0=Idle,1=Filling,2=Heating,3=HoldingTemp,4=Discharging,5=Fault)", initialValue: 0);
             tags.Define("KT301_HOLD_TMR", BuiltInType.Double, kt, "sec", "Pasteurization Hold Timer", 0.0);
             tags.Define("KT301_BATCH_ID", BuiltInType.String, kt, description: "Batch ID currently in KT-301", initialValue: "");
+
+            // --- Condition monitoring / predictive maintenance (AGIT-301) ---
+            tags.Define("AGIT301_VIB", BuiltInType.Double, kt, "mm/s", "Kettle Agitator Vibration (RMS)", 0.0);
+            tags.Define("AGIT301_FAULT", BuiltInType.Boolean, kt, description: "Kettle Agitator Fault");
+            tags.Define("AGIT301_BRGTEMP", BuiltInType.Double, kt, "degC", "Kettle Agitator Bearing Temperature", 22.0);
+            tags.Define("AGIT301_MCSA", BuiltInType.Double, kt, "%", "Kettle Agitator Motor Current Signature Index", 0.0);
+            tags.Define("AGIT301_FAILCNT", BuiltInType.Int32, kt, description: "Kettle Agitator Cumulative Failure Count", initialValue: 0);
         }
 
         private static void RegisterArea400(TagRegistry tags)
@@ -217,6 +255,28 @@ namespace BatchPlant.Process
 
             // Batch ID tags for genealogy (published by BatchManager)
             tags.Define("DA401_BATCH_ID", BuiltInType.String, da, description: "Batch ID currently in DA-401", initialValue: "");
+
+            // --- Condition monitoring / predictive maintenance ---
+            // Vacuum pump 401-VP-001 (FAULT defined above)
+            tags.Define("401-VP-001_VIB", BuiltInType.Double, da, "mm/s", "Vacuum Pump Vibration (RMS)", 0.0);
+            tags.Define("401-VP-001_BRGTEMP", BuiltInType.Double, da, "degC", "Vacuum Pump Bearing Temperature", 22.0);
+            tags.Define("401-VP-001_MCSA", BuiltInType.Double, da, "%", "Vacuum Pump Motor Current Signature Index", 0.0);
+            tags.Define("401-VP-001_FAILCNT", BuiltInType.Int32, da, description: "Vacuum Pump Cumulative Failure Count", initialValue: 0);
+            // Transfer pump 401-P-001
+            tags.Define("401-P-001_FAULT", BuiltInType.Boolean, da, description: "Transfer Pump Fault");
+            tags.Define("401-P-001_FAILCNT", BuiltInType.Int32, da, description: "Transfer Pump Cumulative Failure Count", initialValue: 0);
+            tags.Define("401-P-001_VIB", BuiltInType.Double, da, "mm/s", "Transfer Pump Vibration (RMS)", 0.0);
+            tags.Define("401-P-001_BRGTEMP", BuiltInType.Double, da, "degC", "Transfer Pump Bearing Temperature", 22.0);
+            tags.Define("401-P-001_MCSA", BuiltInType.Double, da, "%", "Transfer Pump Motor Current Signature Index", 0.0);
+            // Homogenizer HG-401 (rotating + hydraulic/lube)
+            tags.Define("HOMOG_401_VIB", BuiltInType.Double, hg, "mm/s", "Homogenizer Vibration (RMS)", 0.0);
+            tags.Define("HOMOG_401_BRGTEMP", BuiltInType.Double, hg, "degC", "Homogenizer Bearing Temperature", 22.0);
+            tags.Define("HOMOG_401_MCSA", BuiltInType.Double, hg, "%", "Homogenizer Motor Current Signature Index", 0.0);
+            tags.Define("HOMOG_401_FAILCNT", BuiltInType.Int32, hg, description: "Homogenizer Cumulative Failure Count", initialValue: 0);
+            tags.Define("HOMOG_401_HYD_PRESS", BuiltInType.Double, hg, "bar", "Homogenizer Hydraulic Drive Pressure", 0.0);
+            tags.Define("HOMOG_401_HYD_TEMP", BuiltInType.Double, hg, "degC", "Homogenizer Hydraulic Oil Temperature", 22.0);
+            tags.Define("HOMOG_401_FILTER_DP", BuiltInType.Double, hg, "bar", "Homogenizer Oil Filter Differential Pressure", 0.0);
+            tags.Define("HOMOG_401_OIL_QUAL", BuiltInType.Double, hg, "%", "Homogenizer Lube Oil Quality", 100.0);
         }
 
         private static void RegisterArea450(TagRegistry tags)
@@ -251,6 +311,23 @@ namespace BatchPlant.Process
             tags.Define("BT453_VLV_IN", BuiltInType.Boolean, bt3, description: "BT453 Inlet Valve");
             tags.Define("BT453_VLV_OUT", BuiltInType.Boolean, bt3, description: "BT453 Outlet Valve");
             tags.Define("BT453_LVL_L", BuiltInType.Double, bt3, "L", "Buffer Tank 3 Level Liters", 0.0);
+
+            // --- Condition monitoring / predictive maintenance (buffer tank agitator drives) ---
+            tags.Define("BT451_AGIT_VIB", BuiltInType.Double, bt1, "mm/s", "BT451 Agitator Vibration (RMS)", 0.0);
+            tags.Define("BT451_AGIT_BRGTEMP", BuiltInType.Double, bt1, "degC", "BT451 Agitator Bearing Temperature", 22.0);
+            tags.Define("BT451_AGIT_MCSA", BuiltInType.Double, bt1, "%", "BT451 Agitator Motor Current Signature Index", 0.0);
+            tags.Define("BT451_AGIT_FAULT", BuiltInType.Boolean, bt1, description: "BT451 Agitator Fault");
+            tags.Define("BT451_AGIT_FAILCNT", BuiltInType.Int32, bt1, description: "BT451 Agitator Cumulative Failure Count", initialValue: 0);
+            tags.Define("BT452_AGIT_VIB", BuiltInType.Double, bt2, "mm/s", "BT452 Agitator Vibration (RMS)", 0.0);
+            tags.Define("BT452_AGIT_BRGTEMP", BuiltInType.Double, bt2, "degC", "BT452 Agitator Bearing Temperature", 22.0);
+            tags.Define("BT452_AGIT_MCSA", BuiltInType.Double, bt2, "%", "BT452 Agitator Motor Current Signature Index", 0.0);
+            tags.Define("BT452_AGIT_FAULT", BuiltInType.Boolean, bt2, description: "BT452 Agitator Fault");
+            tags.Define("BT452_AGIT_FAILCNT", BuiltInType.Int32, bt2, description: "BT452 Agitator Cumulative Failure Count", initialValue: 0);
+            tags.Define("BT453_AGIT_VIB", BuiltInType.Double, bt3, "mm/s", "BT453 Agitator Vibration (RMS)", 0.0);
+            tags.Define("BT453_AGIT_BRGTEMP", BuiltInType.Double, bt3, "degC", "BT453 Agitator Bearing Temperature", 22.0);
+            tags.Define("BT453_AGIT_MCSA", BuiltInType.Double, bt3, "%", "BT453 Agitator Motor Current Signature Index", 0.0);
+            tags.Define("BT453_AGIT_FAULT", BuiltInType.Boolean, bt3, description: "BT453 Agitator Fault");
+            tags.Define("BT453_AGIT_FAILCNT", BuiltInType.Int32, bt3, description: "BT453 Agitator Cumulative Failure Count", initialValue: 0);
         }
 
         private static void RegisterArea500(TagRegistry tags)
@@ -342,6 +419,18 @@ namespace BatchPlant.Process
             tags.Define("CONV_501_OP_MODE", BuiltInType.Int32, conv, description: "PackML Operational Mode", initialValue: 1);
             tags.Define("CONV_501_OP_MODE_TXT", BuiltInType.String, conv, description: "PackML Operational Mode Text", initialValue: "Idle");
             tags.Define("CONV_501_MODE_DUR", BuiltInType.Double, conv, "sec", "Time in Current Mode", 0.0);
+
+            // --- Condition monitoring / predictive maintenance ---
+            // Capper CAP-501 head drive
+            tags.Define("CAP_501_VIB", BuiltInType.Double, cap, "mm/s", "Capper Vibration (RMS)", 0.0);
+            tags.Define("CAP_501_BRGTEMP", BuiltInType.Double, cap, "degC", "Capper Bearing Temperature", 22.0);
+            tags.Define("CAP_501_MCSA", BuiltInType.Double, cap, "%", "Capper Motor Current Signature Index", 0.0);
+            tags.Define("CAP_501_FAILCNT", BuiltInType.Int32, cap, description: "Capper Cumulative Failure Count", initialValue: 0);
+            // Conveyor CONV-501 (FAULT defined above)
+            tags.Define("CONV_501_VIB", BuiltInType.Double, conv, "mm/s", "Conveyor Vibration (RMS)", 0.0);
+            tags.Define("CONV_501_BRGTEMP", BuiltInType.Double, conv, "degC", "Conveyor Bearing Temperature", 22.0);
+            tags.Define("CONV_501_MCSA", BuiltInType.Double, conv, "%", "Conveyor Motor Current Signature Index", 0.0);
+            tags.Define("CONV_501_FAILCNT", BuiltInType.Int32, conv, description: "Conveyor Cumulative Failure Count", initialValue: 0);
         }
 
         private static void RegisterArea600(TagRegistry tags)
@@ -424,6 +513,31 @@ namespace BatchPlant.Process
             tags.Define("PAL_601_OP_MODE", BuiltInType.Int32, pal, description: "PackML Operational Mode", initialValue: 1);
             tags.Define("PAL_601_OP_MODE_TXT", BuiltInType.String, pal, description: "PackML Operational Mode Text", initialValue: "Idle");
             tags.Define("PAL_601_MODE_DUR", BuiltInType.Double, pal, "sec", "Time in Current Mode", 0.0);
+
+            // --- Condition monitoring / predictive maintenance ---
+            // Labeler LBL-601 drive (FAULT defined above)
+            tags.Define("LBL_601_VIB", BuiltInType.Double, lbl, "mm/s", "Labeler Vibration (RMS)", 0.0);
+            tags.Define("LBL_601_BRGTEMP", BuiltInType.Double, lbl, "degC", "Labeler Bearing Temperature", 22.0);
+            tags.Define("LBL_601_MCSA", BuiltInType.Double, lbl, "%", "Labeler Motor Current Signature Index", 0.0);
+            tags.Define("LBL_601_FAILCNT", BuiltInType.Int32, lbl, description: "Labeler Cumulative Failure Count", initialValue: 0);
+            // Case Packer CP-601 (rotating + hydraulic; FAULT defined above)
+            tags.Define("CP_601_VIB", BuiltInType.Double, cp, "mm/s", "Case Packer Vibration (RMS)", 0.0);
+            tags.Define("CP_601_BRGTEMP", BuiltInType.Double, cp, "degC", "Case Packer Bearing Temperature", 22.0);
+            tags.Define("CP_601_MCSA", BuiltInType.Double, cp, "%", "Case Packer Motor Current Signature Index", 0.0);
+            tags.Define("CP_601_FAILCNT", BuiltInType.Int32, cp, description: "Case Packer Cumulative Failure Count", initialValue: 0);
+            tags.Define("CP_601_HYD_PRESS", BuiltInType.Double, cp, "bar", "Case Packer Hydraulic Pressure", 0.0);
+            tags.Define("CP_601_HYD_TEMP", BuiltInType.Double, cp, "degC", "Case Packer Hydraulic Oil Temperature", 22.0);
+            tags.Define("CP_601_FILTER_DP", BuiltInType.Double, cp, "bar", "Case Packer Hydraulic Filter Differential Pressure", 0.0);
+            tags.Define("CP_601_OIL_QUAL", BuiltInType.Double, cp, "%", "Case Packer Hydraulic Oil Quality", 100.0);
+            // Palletizer PAL-601 (rotating + hydraulic; FAULT defined above)
+            tags.Define("PAL_601_VIB", BuiltInType.Double, pal, "mm/s", "Palletizer Vibration (RMS)", 0.0);
+            tags.Define("PAL_601_BRGTEMP", BuiltInType.Double, pal, "degC", "Palletizer Bearing Temperature", 22.0);
+            tags.Define("PAL_601_MCSA", BuiltInType.Double, pal, "%", "Palletizer Motor Current Signature Index", 0.0);
+            tags.Define("PAL_601_FAILCNT", BuiltInType.Int32, pal, description: "Palletizer Cumulative Failure Count", initialValue: 0);
+            tags.Define("PAL_601_HYD_PRESS", BuiltInType.Double, pal, "bar", "Palletizer Hydraulic Pressure", 0.0);
+            tags.Define("PAL_601_HYD_TEMP", BuiltInType.Double, pal, "degC", "Palletizer Hydraulic Oil Temperature", 22.0);
+            tags.Define("PAL_601_FILTER_DP", BuiltInType.Double, pal, "bar", "Palletizer Hydraulic Filter Differential Pressure", 0.0);
+            tags.Define("PAL_601_OIL_QUAL", BuiltInType.Double, pal, "%", "Palletizer Hydraulic Oil Quality", 100.0);
         }
 
         private static void RegisterArea700(TagRegistry tags)
@@ -444,6 +558,13 @@ namespace BatchPlant.Process
             tags.Define("CIP_TIMER", BuiltInType.Double, c1, "sec", "CIP Step Timer", 0.0);
             tags.Define("CIP_PHASE", BuiltInType.String, c1, description: "CIP Phase Description", initialValue: "Idle");
             tags.Define("CIP_ACTIVE", BuiltInType.Boolean, c1, description: "CIP Cycle Active");
+
+            // --- Condition monitoring / predictive maintenance (CIP supply pump P701) ---
+            tags.Define("CIP_P701_FAULT", BuiltInType.Boolean, c1, description: "CIP Pump Fault");
+            tags.Define("CIP_P701_FAILCNT", BuiltInType.Int32, c1, description: "CIP Pump Cumulative Failure Count", initialValue: 0);
+            tags.Define("CIP_P701_VIB", BuiltInType.Double, c1, "mm/s", "CIP Pump Vibration (RMS)", 0.0);
+            tags.Define("CIP_P701_BRGTEMP", BuiltInType.Double, c1, "degC", "CIP Pump Bearing Temperature", 22.0);
+            tags.Define("CIP_P701_MCSA", BuiltInType.Double, c1, "%", "CIP Pump Motor Current Signature Index", 0.0);
         }
 
         private static void RegisterArea800(TagRegistry tags)
@@ -491,6 +612,46 @@ namespace BatchPlant.Process
             tags.Define("HW_RET_TEMP", BuiltInType.Double, hw, "degC", "Hot Water Return Temperature", 65.0);
             tags.Define("HW_FLOW", BuiltInType.Double, hw, "L/min", "Hot Water Flow", 0.0);
             tags.Define("HW_PUMP_STS", BuiltInType.Int32, hw, description: "Hot Water Pump Status", initialValue: 1);
+
+            // --- Condition monitoring / predictive maintenance ---
+            // Air compressor (rotating + lube oil + intake filter)
+            tags.Define("COMP_FAULT", BuiltInType.Boolean, air, description: "Compressor Fault");
+            tags.Define("COMP_FAILCNT", BuiltInType.Int32, air, description: "Compressor Cumulative Failure Count", initialValue: 0);
+            tags.Define("COMP_VIB", BuiltInType.Double, air, "mm/s", "Compressor Vibration (RMS)", 0.0);
+            tags.Define("COMP_BRGTEMP", BuiltInType.Double, air, "degC", "Compressor Bearing Temperature", 25.0);
+            tags.Define("COMP_MCSA", BuiltInType.Double, air, "%", "Compressor Motor Current Signature Index", 0.0);
+            tags.Define("COMP_OIL_QUAL", BuiltInType.Double, air, "%", "Compressor Lube Oil Quality", 100.0);
+            tags.Define("COMP_FILTER_DP", BuiltInType.Double, air, "bar", "Compressor Intake Filter Differential Pressure", 0.0);
+            // Cooling water pump 1
+            tags.Define("CW_PUMP1_FAULT", BuiltInType.Boolean, cw, description: "Cooling Pump 1 Fault");
+            tags.Define("CW_PUMP1_FAILCNT", BuiltInType.Int32, cw, description: "Cooling Pump 1 Cumulative Failure Count", initialValue: 0);
+            tags.Define("CW_PUMP1_VIB", BuiltInType.Double, cw, "mm/s", "Cooling Pump 1 Vibration (RMS)", 0.0);
+            tags.Define("CW_PUMP1_BRGTEMP", BuiltInType.Double, cw, "degC", "Cooling Pump 1 Bearing Temperature", 25.0);
+            tags.Define("CW_PUMP1_MCSA", BuiltInType.Double, cw, "%", "Cooling Pump 1 Motor Current Signature Index", 0.0);
+            // Cooling water pump 2 (standby)
+            tags.Define("CW_PUMP2_FAULT", BuiltInType.Boolean, cw, description: "Cooling Pump 2 Fault");
+            tags.Define("CW_PUMP2_FAILCNT", BuiltInType.Int32, cw, description: "Cooling Pump 2 Cumulative Failure Count", initialValue: 0);
+            tags.Define("CW_PUMP2_VIB", BuiltInType.Double, cw, "mm/s", "Cooling Pump 2 Vibration (RMS)", 0.0);
+            tags.Define("CW_PUMP2_BRGTEMP", BuiltInType.Double, cw, "degC", "Cooling Pump 2 Bearing Temperature", 25.0);
+            tags.Define("CW_PUMP2_MCSA", BuiltInType.Double, cw, "%", "Cooling Pump 2 Motor Current Signature Index", 0.0);
+            // Cooling tower fan 1
+            tags.Define("CW_FAN1_FAULT", BuiltInType.Boolean, cw, description: "Cooling Tower Fan 1 Fault");
+            tags.Define("CW_FAN1_FAILCNT", BuiltInType.Int32, cw, description: "Cooling Tower Fan 1 Cumulative Failure Count", initialValue: 0);
+            tags.Define("CW_FAN1_VIB", BuiltInType.Double, cw, "mm/s", "Cooling Tower Fan 1 Vibration (RMS)", 0.0);
+            tags.Define("CW_FAN1_BRGTEMP", BuiltInType.Double, cw, "degC", "Cooling Tower Fan 1 Bearing Temperature", 25.0);
+            tags.Define("CW_FAN1_MCSA", BuiltInType.Double, cw, "%", "Cooling Tower Fan 1 Motor Current Signature Index", 0.0);
+            // Cooling tower fan 2
+            tags.Define("CW_FAN2_FAULT", BuiltInType.Boolean, cw, description: "Cooling Tower Fan 2 Fault");
+            tags.Define("CW_FAN2_FAILCNT", BuiltInType.Int32, cw, description: "Cooling Tower Fan 2 Cumulative Failure Count", initialValue: 0);
+            tags.Define("CW_FAN2_VIB", BuiltInType.Double, cw, "mm/s", "Cooling Tower Fan 2 Vibration (RMS)", 0.0);
+            tags.Define("CW_FAN2_BRGTEMP", BuiltInType.Double, cw, "degC", "Cooling Tower Fan 2 Bearing Temperature", 25.0);
+            tags.Define("CW_FAN2_MCSA", BuiltInType.Double, cw, "%", "Cooling Tower Fan 2 Motor Current Signature Index", 0.0);
+            // Hot water circulation pump
+            tags.Define("HW_PUMP_FAULT", BuiltInType.Boolean, hw, description: "Hot Water Pump Fault");
+            tags.Define("HW_PUMP_FAILCNT", BuiltInType.Int32, hw, description: "Hot Water Pump Cumulative Failure Count", initialValue: 0);
+            tags.Define("HW_PUMP_VIB", BuiltInType.Double, hw, "mm/s", "Hot Water Pump Vibration (RMS)", 0.0);
+            tags.Define("HW_PUMP_BRGTEMP", BuiltInType.Double, hw, "degC", "Hot Water Pump Bearing Temperature", 25.0);
+            tags.Define("HW_PUMP_MCSA", BuiltInType.Double, hw, "%", "Hot Water Pump Motor Current Signature Index", 0.0);
         }
 
         private static void RegisterBatchControl(TagRegistry tags)
@@ -542,7 +703,7 @@ namespace BatchPlant.Process
             tags.Define("BATCH_LINE_RUNNING", BuiltInType.Boolean, p, description: "Batch Line Producing");
 
             tags.Define("BATCHES_TODAY", BuiltInType.Int32, p, description: "Batches Completed Today", initialValue: 0);
-            tags.Define("BATCHES_THIS_SHIFT", BuiltInType.Int32, p, description: "Batches Completed This Shift", initialValue: 0);
+            tags.Define("BATCHES_SHIFT", BuiltInType.Int32, p, description: "Batches Completed This Shift", initialValue: 0);
             tags.Define("CURRENT_BATCH_ID", BuiltInType.String, p, description: "Currently Running Batch ID", initialValue: "");
 
             tags.Define("AVG_BATCH_CYCLE_MIN", BuiltInType.Double, p, "min", "Rolling Average Batch Cycle Time", 0.0);
@@ -556,6 +717,12 @@ namespace BatchPlant.Process
             tags.Define("BATCH_LINE_RUNTIME_MIN", BuiltInType.Double, p, "min", "Batch Line Runtime Today", 0.0);
             tags.Define("BATCH_LINE_DOWNTIME_MIN", BuiltInType.Double, p, "min", "Batch Line Downtime Today", 0.0);
             tags.Define("BATCH_LINE_CIP_TIME_MIN", BuiltInType.Double, p, "min", "Batch Line CIP Time Today", 0.0);
+
+            // Active-phase view (batch-line scoped) and batch quality counts
+            tags.Define("BATCH_LINE_CURRENT_PHASE", BuiltInType.String, p, description: "Current Phase of the Active Batch", initialValue: "");
+            tags.Define("BATCH_LINE_PHASE_ELAPSED", BuiltInType.Double, p, "sec", "Elapsed Time in Current Phase", 0.0);
+            tags.Define("BATCH_LINE_GOOD_BATCHES_SHIFT", BuiltInType.Int32, p, description: "Good Batches Completed This Shift (no deviations/alarms)", initialValue: 0);
+            tags.Define("BATCH_LINE_SCRAP_BATCHES_SHIFT", BuiltInType.Int32, p, description: "Scrap/Rework Batches This Shift (deviated or aborted)", initialValue: 0);
         }
 
         private static void RegisterPackLine(TagRegistry tags)
@@ -586,12 +753,17 @@ namespace BatchPlant.Process
             tags.Define("PACK_LINE_LAST_CHANGEOVER_MIN", BuiltInType.Double, p, "min", "Duration of Last Changeover", 0.0);
 
             tags.Define("BOTTLES_TODAY", BuiltInType.Int32, p, description: "Bottles Produced Today", initialValue: 0);
-            tags.Define("BOTTLES_THIS_SHIFT", BuiltInType.Int32, p, description: "Bottles Produced This Shift", initialValue: 0);
+            tags.Define("BOTTLES_SHIFT", BuiltInType.Int32, p, description: "Bottles Produced This Shift", initialValue: 0);
             tags.Define("CASES_TODAY", BuiltInType.Int32, p, description: "Cases Packed Today", initialValue: 0);
             tags.Define("PALLETS_TODAY", BuiltInType.Int32, p, description: "Pallets Complete Today", initialValue: 0);
 
+            // Production quality counts (line-level, aggregated from constituent machines)
+            tags.Define("PACK_LINE_GOOD_UNITS_SHIFT", BuiltInType.Int32, p, "units", "Good Units Produced This Shift", 0);
+            tags.Define("PACK_LINE_SCRAP_UNITS_SHIFT", BuiltInType.Int32, p, "units", "Scrap/Reject Units This Shift", 0);
+
             tags.Define("PACK_LINE_SPEED", BuiltInType.Double, p, "BPM", "Current Line Speed", 0.0);
             tags.Define("PACK_LINE_TARGET_SPEED", BuiltInType.Double, p, "BPM", "Target Line Speed", 200.0);
+            tags.Define("PACK_LINE_CYCLE_TIME", BuiltInType.Double, p, "sec", "Current Cycle Time (per unit)", 0.0);
 
             tags.Define("PACK_LINE_OEE_AVAIL", BuiltInType.Double, p, "%", "Packaging Line Availability", 0.0);
             tags.Define("PACK_LINE_OEE_PERF", BuiltInType.Double, p, "%", "Packaging Line Performance", 0.0);

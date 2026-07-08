@@ -13,6 +13,16 @@ namespace BatchPlant.Equipment
         public string? Run { get; set; }
         public string? Fault { get; set; }
         public string? ValveHours { get; set; }
+        // Condition monitoring
+        public string? Vibration { get; set; }
+        public string? BearingTemp { get; set; }
+        public string? Mcsa { get; set; }             // motor current signature anomaly index
+        public string? FailureCount { get; set; }
+        // Hydraulic / lube health
+        public string? HydPressure { get; set; }
+        public string? HydTemp { get; set; }
+        public string? FilterDp { get; set; }
+        public string? OilQuality { get; set; }
     }
 
     /// <summary>
@@ -39,9 +49,19 @@ namespace BatchPlant.Equipment
 
         private HomogenizerTagMap _tags = new();
 
+        protected override double ConditionLoad =>
+            State == EquipmentState.Running ? Math.Clamp(Pressure / MaxPressure, 0, 1.5) : 0.0;
+
         public Homogenizer(PlantContext ctx, string name) : base(ctx, name)
         {
             SetTransitionDelays(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(5));
+
+            // Reciprocating HP unit: higher baseline vibration, hydraulic drive + lube oil.
+            Condition.BaseVibration = 3.0;
+            Condition.BearingRise = 45.0;
+            Condition.HydNominalPressure = 180.0;
+            Condition.HydFullTemp = 55.0;
+            Condition.FilterDpClean = 0.35;
         }
 
         public Homogenizer Bind(HomogenizerTagMap tags)
@@ -99,6 +119,16 @@ namespace BatchPlant.Equipment
             if (_tags.Run != null) Ctx.Tags.Write(_tags.Run, State == EquipmentState.Running);
             if (_tags.Fault != null) Ctx.Tags.Write(_tags.Fault, State == EquipmentState.Faulted);
             if (_tags.ValveHours != null) Ctx.Tags.Write(_tags.ValveHours, Math.Round(ValveHours, 2));
+            // Condition monitoring
+            if (_tags.Vibration != null) Ctx.Tags.Write(_tags.Vibration, Math.Round(Condition.Vibration, 3));
+            if (_tags.BearingTemp != null) Ctx.Tags.Write(_tags.BearingTemp, Math.Round(Condition.BearingTemp, 1));
+            if (_tags.Mcsa != null) Ctx.Tags.Write(_tags.Mcsa, Math.Round(Condition.McsaIndex, 1));
+            if (_tags.FailureCount != null) Ctx.Tags.Write(_tags.FailureCount, FailureCount);
+            // Hydraulic / lube
+            if (_tags.HydPressure != null) Ctx.Tags.Write(_tags.HydPressure, Math.Round(Condition.HydraulicPressure, 1));
+            if (_tags.HydTemp != null) Ctx.Tags.Write(_tags.HydTemp, Math.Round(Condition.HydraulicTemp, 1));
+            if (_tags.FilterDp != null) Ctx.Tags.Write(_tags.FilterDp, Math.Round(Condition.FilterDp, 3));
+            if (_tags.OilQuality != null) Ctx.Tags.Write(_tags.OilQuality, Math.Round(Condition.OilQuality, 1));
         }
     }
 }

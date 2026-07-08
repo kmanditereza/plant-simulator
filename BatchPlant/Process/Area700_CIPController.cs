@@ -1,4 +1,5 @@
 using BatchPlant.Core;
+using BatchPlant.Equipment;
 
 namespace BatchPlant.Process
 {
@@ -60,6 +61,9 @@ namespace BatchPlant.Process
         private double _supplyValvePos;
         private double _returnValvePos;
         private bool _pumpRunning;
+
+        // Condition monitoring for the CIP supply pump
+        private readonly ConditionMonitor _cmCipPump;
         private DateTime _nextCipStartTime;
         private bool _initialized;
 
@@ -69,6 +73,8 @@ namespace BatchPlant.Process
         public Area700_CIPController(PlantContext ctx)
         {
             _ctx = ctx;
+            _cmCipPump = new ConditionMonitor(ctx) { BaseVibration = 1.7, BearingRise = 35 };
+            _cmCipPump.SeedHours(150);
         }
 
         public void Tick(TimeSpan dt, DateTime simNow)
@@ -157,6 +163,10 @@ namespace BatchPlant.Process
             t.Write("CIP_V702_POS", Math.Round(_returnValvePos, 0));
             t.Write("CIP_P701_RUN", _pumpRunning);
             t.Write("CIP_P701_AMPS", Math.Round(_currentPumpAmps, 1));
+            _cmCipPump.Update(_pumpRunning, 0.7, false, dt.TotalSeconds);
+            t.Write("CIP_P701_FAULT", false);
+            _cmCipPump.Publish(t, vibration: "CIP_P701_VIB", bearingTemp: "CIP_P701_BRGTEMP",
+                mcsa: "CIP_P701_MCSA", failureCount: "CIP_P701_FAILCNT");
             t.Write("CIP_STEP", (int)_currentStep);
             t.Write("CIP_TIMER", Math.Round(_stepTimerSec, 0));
             t.Write("CIP_PHASE", _currentStep == CipStep.Idle ? "Idle" : StepConfig[_currentStepIndex].Description);

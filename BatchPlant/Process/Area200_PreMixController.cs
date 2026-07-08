@@ -102,7 +102,10 @@ namespace BatchPlant.Process
                 Current = "AGIT201_AMPS",
                 Vibration = "AGIT201_VIB",
                 Run = "AGIT201_RUN",
-                Fault = "AGIT201_FAULT"
+                Fault = "AGIT201_FAULT",
+                BearingTemp = "AGIT201_BRGTEMP",
+                Mcsa = "AGIT201_MCSA",
+                FailureCount = "AGIT201_FAILCNT"
             });
 
             WaterInlet = new Valve(ctx, "XV-201") { IsOnOff = true, TravelTimeSeconds = 2.0 }

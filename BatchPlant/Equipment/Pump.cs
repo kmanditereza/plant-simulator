@@ -14,6 +14,10 @@ namespace BatchPlant.Equipment
         public string? Run { get; set; }       // Boolean running
         public string? Fault { get; set; }
         public string? Speed { get; set; }     // VFD speed feedback
+        public string? Vibration { get; set; }
+        public string? BearingTemp { get; set; }
+        public string? Mcsa { get; set; }         // motor current signature anomaly index
+        public string? FailureCount { get; set; }
     }
 
     /// <summary>
@@ -38,6 +42,9 @@ namespace BatchPlant.Equipment
         public bool IsPositiveDisplacement { get; set; }
 
         private PumpTagMap _tags = new();
+
+        protected override double ConditionLoad =>
+            State == EquipmentState.Running ? Math.Clamp(SpeedPercent / 100.0, 0, 1.5) : 0.0;
 
         public Pump(PlantContext ctx, string name) : base(ctx, name)
         {
@@ -103,6 +110,10 @@ namespace BatchPlant.Equipment
             if (_tags.Run != null) Ctx.Tags.Write(_tags.Run, State == EquipmentState.Running);
             if (_tags.Fault != null) Ctx.Tags.Write(_tags.Fault, State == EquipmentState.Faulted);
             if (_tags.Speed != null) Ctx.Tags.Write(_tags.Speed, Math.Round(SpeedPercent, 1));
+            if (_tags.Vibration != null) Ctx.Tags.Write(_tags.Vibration, Math.Round(Condition.Vibration, 3));
+            if (_tags.BearingTemp != null) Ctx.Tags.Write(_tags.BearingTemp, Math.Round(Condition.BearingTemp, 1));
+            if (_tags.Mcsa != null) Ctx.Tags.Write(_tags.Mcsa, Math.Round(Condition.McsaIndex, 1));
+            if (_tags.FailureCount != null) Ctx.Tags.Write(_tags.FailureCount, FailureCount);
         }
     }
 }

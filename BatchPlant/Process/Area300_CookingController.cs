@@ -93,7 +93,12 @@ namespace BatchPlant.Process
             {
                 Speed = "AGIT301_SPD",
                 Current = "AGIT301_AMPS",
-                Run = "AGIT301_RUN"
+                Run = "AGIT301_RUN",
+                Vibration = "AGIT301_VIB",
+                Fault = "AGIT301_FAULT",
+                BearingTemp = "AGIT301_BRGTEMP",
+                Mcsa = "AGIT301_MCSA",
+                FailureCount = "AGIT301_FAILCNT"
             });
 
             SteamValve = new Valve(ctx, "TCV-301") { IsOnOff = false, TravelTimeSeconds = 3.0 }

@@ -164,6 +164,8 @@ namespace BatchPlant.Process
             private readonly string _tValveIn;
             private readonly string _tValveOut;
             private readonly string _tAgitRun;
+            private readonly string _agitBase;
+            private readonly ConditionMonitor _cmAgit;
             private readonly Vessel _vessel;
 
             public BufferTankState TankState { get; private set; } = BufferTankState.Empty;
@@ -184,6 +186,8 @@ namespace BatchPlant.Process
                 _tValveIn = tValveIn;
                 _tValveOut = tValveOut;
                 _tAgitRun = tAgitRun;
+                _agitBase = tAgitRun.Replace("_RUN", "");   // e.g. "BT451_AGIT"
+                _cmAgit = new ConditionMonitor(ctx) { BaseVibration = 1.2, BearingRise = 25 };
 
                 _vessel = new Vessel(ctx, name)
                 {
@@ -271,6 +275,11 @@ namespace BatchPlant.Process
                 }
 
                 _vessel.Tick(dt, simNow);
+
+                // Agitator condition monitoring (runs whenever the tank holds product)
+                bool agitRunning = _vessel.Level > 100;
+                _cmAgit.Update(agitRunning, 0.5, false, dt.TotalSeconds);
+
                 PublishStateTags();
             }
 
@@ -279,6 +288,10 @@ namespace BatchPlant.Process
                 _ctx.Tags.Write(_tValveIn, TankState == BufferTankState.Filling);
                 _ctx.Tags.Write(_tValveOut, TankState == BufferTankState.Draining);
                 _ctx.Tags.Write(_tAgitRun, _vessel.Level > 100);
+                _ctx.Tags.Write($"{_agitBase}_FAULT", false);
+                _cmAgit.Publish(_ctx.Tags,
+                    vibration: $"{_agitBase}_VIB", bearingTemp: $"{_agitBase}_BRGTEMP",
+                    mcsa: $"{_agitBase}_MCSA", failureCount: $"{_agitBase}_FAILCNT");
             }
         }
     }

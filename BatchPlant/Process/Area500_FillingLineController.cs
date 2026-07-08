@@ -62,8 +62,15 @@ namespace BatchPlant.Process
         // Capper state (simple - no Equipment subclass)
         private long _capsApplied;
 
+        // Condition monitoring for the capper head drive and discharge conveyor
+        private readonly ConditionMonitor _cmCapper;
+        private readonly ConditionMonitor _cmConveyor;
+
         // Shift-local and daily counters for PackLine aggregations
         private int _bottlesTodayCounter;
+        private int _bottlesThisShift;
+        private ShiftType _lastShift;
+        private bool _shiftInit;
         private double _runtimeMinToday;
         private double _downtimeMinToday;
 
@@ -73,6 +80,11 @@ namespace BatchPlant.Process
         {
             _ctx = ctx;
             _buffers = buffers;
+
+            _cmCapper = new ConditionMonitor(ctx) { BaseVibration = 1.6, BearingRise = 30 };
+            _cmCapper.SeedHours(250);
+            _cmConveyor = new ConditionMonitor(ctx) { BaseVibration = 1.2, BearingRise = 25 };
+            _cmConveyor.SeedHours(500);
 
             // FL-501: 12-head rotary piston filler
             Filler = new PistonFiller(ctx, "FL-501")
@@ -108,6 +120,15 @@ namespace BatchPlant.Process
                 // Start the filler so it can produce when commanded
                 Filler.Start();
                 _initialized = true;
+            }
+
+            // Reset the per-shift bottle counter at each shift change.
+            ShiftType shift = _ctx.Clock.CurrentShift;
+            if (!_shiftInit || shift != _lastShift)
+            {
+                _shiftInit = true;
+                _lastShift = shift;
+                _bottlesThisShift = 0;
             }
 
             // 1. Determine what the line SHOULD be doing based on conditions
@@ -161,6 +182,7 @@ namespace BatchPlant.Process
                 BottlesProducedThisTick = filled;
                 _capsApplied += filled;
                 _bottlesTodayCounter += filled;
+                _bottlesThisShift += filled;
 
                 _lineSpeed = Filler.ActualRate;
                 _runtimeMinToday += dtMin;
@@ -220,6 +242,14 @@ namespace BatchPlant.Process
             t.Write("CONV_501_RUN", _lineState == OperationalState.Running);
             t.Write("CONV_501_FAULT", false);
 
+            // Condition monitoring for capper head drive and conveyor
+            bool lineRunning = _lineState == OperationalState.Running;
+            double packLoad = Math.Clamp(_lineSpeed / TargetBpm, 0, 1.2);
+            _cmCapper.Update(lineRunning, packLoad, Filler.IsFaulted, dt.TotalSeconds);
+            _cmCapper.Publish(t, vibration: "CAP_501_VIB", bearingTemp: "CAP_501_BRGTEMP", mcsa: "CAP_501_MCSA", failureCount: "CAP_501_FAILCNT");
+            _cmConveyor.Update(lineRunning, packLoad, false, dt.TotalSeconds);
+            _cmConveyor.Publish(t, vibration: "CONV_501_VIB", bearingTemp: "CONV_501_BRGTEMP", mcsa: "CONV_501_MCSA", failureCount: "CONV_501_FAILCNT");
+
             // PackML state/mode tags per station - for simplicity, all stations mirror the line state
             double stateDurSec = (simNow - _stateEntered).TotalSeconds;
             double modeDurSec = (simNow - _modeEntered).TotalSeconds;
@@ -255,6 +285,13 @@ namespace BatchPlant.Process
             t.Write("PACK_LINE_OEE_QUAL", Math.Round(quality, 1));
             t.Write("PACK_LINE_OEE_OVERALL", Math.Round(oeeOverall, 1));
             t.Write("BOTTLES_TODAY", _bottlesTodayCounter);
+            t.Write("BOTTLES_SHIFT", _bottlesThisShift);
+
+            // Cycle time (seconds per unit) derived from current line speed.
+            // Line-global (whole line runs synchronized at this speed); good/scrap
+            // unit aggregates are published by Area 600 once all stations are tallied.
+            double cycleTimeSec = _lineSpeed > 0 ? 60.0 / _lineSpeed : 0.0;
+            t.Write("PACK_LINE_CYCLE_TIME", Math.Round(cycleTimeSec, 2));
         }
 
         private void UpdateTunnelTemperatures(TimeSpan dt, bool filling)

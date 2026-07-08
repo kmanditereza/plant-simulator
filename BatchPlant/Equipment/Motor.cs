@@ -14,6 +14,9 @@ namespace BatchPlant.Equipment
         public string? Vibration { get; set; }
         public string? Run { get; set; }
         public string? Fault { get; set; }
+        public string? BearingTemp { get; set; }
+        public string? Mcsa { get; set; }         // motor current signature anomaly index
+        public string? FailureCount { get; set; }
     }
 
     /// <summary>
@@ -48,6 +51,9 @@ namespace BatchPlant.Equipment
         public double LoadFactor { get; set; } = 0.3;
 
         private MotorTagMap _tags = new();
+
+        protected override double ConditionLoad =>
+            State == EquipmentState.Running ? Math.Clamp(Speed / MaxSpeed, 0, 1.5) : 0.0;
 
         public Motor(PlantContext ctx, string name) : base(ctx, name)
         {
@@ -120,6 +126,9 @@ namespace BatchPlant.Equipment
             if (_tags.Vibration != null) Ctx.Tags.Write(_tags.Vibration, Math.Round(Vibration, 3));
             if (_tags.Run != null) Ctx.Tags.Write(_tags.Run, State == EquipmentState.Running);
             if (_tags.Fault != null) Ctx.Tags.Write(_tags.Fault, State == EquipmentState.Faulted);
+            if (_tags.BearingTemp != null) Ctx.Tags.Write(_tags.BearingTemp, Math.Round(Condition.BearingTemp, 1));
+            if (_tags.Mcsa != null) Ctx.Tags.Write(_tags.Mcsa, Math.Round(Condition.McsaIndex, 1));
+            if (_tags.FailureCount != null) Ctx.Tags.Write(_tags.FailureCount, FailureCount);
         }
     }
 }

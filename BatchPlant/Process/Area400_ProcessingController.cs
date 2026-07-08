@@ -81,7 +81,11 @@ namespace BatchPlant.Process
                 VacuumLevel = "401-PI-001",
                 Run = "401-VP-001_RUN",
                 Fault = "401-VP-001_FAULT",
-                Current = "401-VP-001_AMPS"
+                Current = "401-VP-001_AMPS",
+                Vibration = "401-VP-001_VIB",
+                BearingTemp = "401-VP-001_BRGTEMP",
+                Mcsa = "401-VP-001_MCSA",
+                FailureCount = "401-VP-001_FAILCNT"
             });
 
             TransferPump = new Pump(ctx, "401-P-001")
@@ -93,7 +97,12 @@ namespace BatchPlant.Process
             }.Bind(new PumpTagMap
             {
                 Flow = "401-P-001_FLOW",
-                Status = "401-P-001_STS"
+                Status = "401-P-001_STS",
+                Fault = "401-P-001_FAULT",
+                FailureCount = "401-P-001_FAILCNT",
+                Vibration = "401-P-001_VIB",
+                BearingTemp = "401-P-001_BRGTEMP",
+                Mcsa = "401-P-001_MCSA"
             });
 
             HomogenizerUnit = new Homogenizer(ctx, "HG-401")
@@ -111,7 +120,15 @@ namespace BatchPlant.Process
                 Current = "HOMOG_401_AMPS",
                 Run = "HOMOG_401_RUN",
                 Fault = "HOMOG_401_FAULT",
-                ValveHours = "HOMOG_401_VLV_HRS"
+                ValveHours = "HOMOG_401_VLV_HRS",
+                Vibration = "HOMOG_401_VIB",
+                BearingTemp = "HOMOG_401_BRGTEMP",
+                Mcsa = "HOMOG_401_MCSA",
+                FailureCount = "HOMOG_401_FAILCNT",
+                HydPressure = "HOMOG_401_HYD_PRESS",
+                HydTemp = "HOMOG_401_HYD_TEMP",
+                FilterDp = "HOMOG_401_FILTER_DP",
+                OilQuality = "HOMOG_401_OIL_QUAL"
             });
         }
 

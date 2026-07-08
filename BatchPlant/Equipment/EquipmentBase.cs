@@ -29,6 +29,9 @@ namespace BatchPlant.Equipment
         public bool IsFaulted => State == EquipmentState.Faulted;
         public string FaultCode { get; protected set; } = "";
 
+        /// <summary>Cumulative count of fault trips since simulator start (condition monitoring).</summary>
+        public int FailureCount { get; protected set; }
+
         private TimeSpan _startupDelay = TimeSpan.FromSeconds(3);
         private TimeSpan _shutdownDelay = TimeSpan.FromSeconds(2);
         private DateTime? _transitionStart;
@@ -36,10 +39,23 @@ namespace BatchPlant.Equipment
 
         public virtual int Priority => 30; // Equipment layer
 
+        /// <summary>
+        /// Condition-monitoring signal generator (vibration, bearing temp, MCSA, hydraulic/lube).
+        /// Updated automatically each tick; subclasses publish the signals they bind.
+        /// </summary>
+        public ConditionMonitor Condition { get; }
+
+        /// <summary>
+        /// Mechanical load fraction (0..1.5+) reported to the condition monitor.
+        /// Override in subclasses that know their true load; defaults to a mid load when running.
+        /// </summary>
+        protected virtual double ConditionLoad => State == EquipmentState.Running ? 0.6 : 0.0;
+
         protected EquipmentBase(PlantContext ctx, string tagPrefix)
         {
             Ctx = ctx;
             TagPrefix = tagPrefix;
+            Condition = new ConditionMonitor(ctx);
         }
 
         /// <summary>
@@ -80,6 +96,11 @@ namespace BatchPlant.Equipment
         /// </summary>
         public virtual void Fault(string code, TimeSpan repairTime)
         {
+            // Count only new trips (not re-asserting an existing fault).
+            if (State != EquipmentState.Faulted)
+            {
+                FailureCount++;
+            }
             State = EquipmentState.Faulted;
             FaultCode = code;
             _faultRepairTime = Ctx.Clock.Now + repairTime;
@@ -143,6 +164,9 @@ namespace BatchPlant.Equipment
             {
                 UpdateIdle(dt, simNow);
             }
+
+            // Advance condition-monitoring signals before publishing tags.
+            Condition.Update(State == EquipmentState.Running, ConditionLoad, IsFaulted, dt.TotalSeconds);
 
             // Write common tags
             WriteTags();

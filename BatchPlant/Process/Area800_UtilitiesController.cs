@@ -1,4 +1,5 @@
 using BatchPlant.Core;
+using BatchPlant.Equipment;
 
 namespace BatchPlant.Process
 {
@@ -41,9 +42,29 @@ namespace BatchPlant.Process
         private readonly Dictionary<string, double> _steamDemands = new();
         private readonly Dictionary<string, double> _coolingDemands = new();
 
+        // Condition monitoring for rotating utility assets
+        private readonly ConditionMonitor _cmComp;
+        private readonly ConditionMonitor _cmPump1;
+        private readonly ConditionMonitor _cmPump2;
+        private readonly ConditionMonitor _cmFan1;
+        private readonly ConditionMonitor _cmFan2;
+        private readonly ConditionMonitor _cmHwPump;
+
         public Area800_UtilitiesController(PlantContext ctx)
         {
             _ctx = ctx;
+
+            // Compressor: continuous duty (seed some hours), lubricated screw + intake filter.
+            _cmComp = new ConditionMonitor(ctx) { BaseVibration = 2.2, BearingRise = 40, OilServiceHours = 2500, FilterDpClean = 0.15, FilterServiceHours = 1200 };
+            _cmComp.SeedHours(600);
+            _cmPump1 = new ConditionMonitor(ctx) { BaseVibration = 1.8, BearingRise = 35 };
+            _cmPump1.SeedHours(400);
+            _cmPump2 = new ConditionMonitor(ctx) { BaseVibration = 1.8, BearingRise = 35 };
+            _cmFan1 = new ConditionMonitor(ctx) { BaseVibration = 2.5, BearingRise = 30 };
+            _cmFan1.SeedHours(300);
+            _cmFan2 = new ConditionMonitor(ctx) { BaseVibration = 2.5, BearingRise = 30 };
+            _cmHwPump = new ConditionMonitor(ctx) { BaseVibration = 1.5, BearingRise = 35 };
+            _cmHwPump.SeedHours(200);
         }
 
         // -------- Public API for other areas to call each tick --------
@@ -183,6 +204,39 @@ namespace BatchPlant.Process
             t.Write("HW_RET_TEMP", Math.Round(_ctx.AddNoise(65.0, 0.5), 1));
             t.Write("HW_FLOW", Math.Round(_ctx.AddNoise(0.0, 1.0), 1));
             t.Write("HW_PUMP_STS", 1);
+
+            // ---- Condition monitoring for rotating utility assets ----
+            double dtSec = dt.TotalSeconds;
+            double coolLoad = Math.Clamp(coolDemandFrac, 0, 1.2);
+
+            // Compressor (always running), lube + intake filter
+            _cmComp.Update(true, 0.7, false, dtSec);
+            t.Write("COMP_FAULT", false);
+            _cmComp.Publish(t, vibration: "COMP_VIB", bearingTemp: "COMP_BRGTEMP", mcsa: "COMP_MCSA",
+                failureCount: "COMP_FAILCNT", filterDp: "COMP_FILTER_DP", oilQuality: "COMP_OIL_QUAL");
+
+            // Cooling pump 1 (lead, always running) and pump 2 (staged)
+            _cmPump1.Update(true, Math.Max(0.3, coolLoad), false, dtSec);
+            t.Write("CW_PUMP1_FAULT", false);
+            _cmPump1.Publish(t, vibration: "CW_PUMP1_VIB", bearingTemp: "CW_PUMP1_BRGTEMP", mcsa: "CW_PUMP1_MCSA", failureCount: "CW_PUMP1_FAILCNT");
+
+            _cmPump2.Update(pump2Running, coolLoad, false, dtSec);
+            t.Write("CW_PUMP2_FAULT", false);
+            _cmPump2.Publish(t, vibration: "CW_PUMP2_VIB", bearingTemp: "CW_PUMP2_BRGTEMP", mcsa: "CW_PUMP2_MCSA", failureCount: "CW_PUMP2_FAILCNT");
+
+            // Cooling tower fans (staged)
+            _cmFan1.Update(fan1Running, coolLoad, false, dtSec);
+            t.Write("CW_FAN1_FAULT", false);
+            _cmFan1.Publish(t, vibration: "CW_FAN1_VIB", bearingTemp: "CW_FAN1_BRGTEMP", mcsa: "CW_FAN1_MCSA", failureCount: "CW_FAN1_FAILCNT");
+
+            _cmFan2.Update(fan2Running, coolLoad, false, dtSec);
+            t.Write("CW_FAN2_FAULT", false);
+            _cmFan2.Publish(t, vibration: "CW_FAN2_VIB", bearingTemp: "CW_FAN2_BRGTEMP", mcsa: "CW_FAN2_MCSA", failureCount: "CW_FAN2_FAILCNT");
+
+            // Hot water circulation pump (always running)
+            _cmHwPump.Update(true, 0.5, false, dtSec);
+            t.Write("HW_PUMP_FAULT", false);
+            _cmHwPump.Publish(t, vibration: "HW_PUMP_VIB", bearingTemp: "HW_PUMP_BRGTEMP", mcsa: "HW_PUMP_MCSA", failureCount: "HW_PUMP_FAILCNT");
         }
     }
 }

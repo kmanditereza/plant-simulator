@@ -23,6 +23,10 @@ namespace BatchPlant.Process
         private readonly Pump _p101;
         private readonly Pump _p102;
 
+        // Condition monitoring for screw-feeder drives
+        private readonly ConditionMonitor _cmSugarFeeder;
+        private readonly ConditionMonitor _cmSaltFeeder;
+
         public int Priority => 35; // slightly before Area 200 so draw activity is visible same tick
 
         // Tank contents (current state)
@@ -67,7 +71,12 @@ namespace BatchPlant.Process
             {
                 Flow = "P101_FLOW",
                 Current = "P101_AMPS",
-                Status = "P101_STS"
+                Status = "P101_STS",
+                Fault = "P101_FAULT",
+                FailureCount = "P101_FAILCNT",
+                Vibration = "P101_VIB",
+                BearingTemp = "P101_BRGTEMP",
+                Mcsa = "P101_MCSA"
             });
 
             _p102 = new Pump(ctx, "P-102")
@@ -79,8 +88,16 @@ namespace BatchPlant.Process
                 SpeedPercent = 80
             }.Bind(new PumpTagMap
             {
-                Status = "P102_STS"
+                Status = "P102_STS",
+                Fault = "P102_FAULT",
+                FailureCount = "P102_FAILCNT",
+                Vibration = "P102_VIB",
+                BearingTemp = "P102_BRGTEMP",
+                Mcsa = "P102_MCSA"
             });
+
+            _cmSugarFeeder = new ConditionMonitor(_ctx) { BaseVibration = 1.0, BearingRise = 22 };
+            _cmSaltFeeder = new ConditionMonitor(_ctx) { BaseVibration = 1.0, BearingRise = 22 };
         }
 
         // ---- Public draw API called by Area 200 each tick while its intake valves are open ----
@@ -210,10 +227,18 @@ namespace BatchPlant.Process
             t.Write("SUGAR_BIN_WT", Math.Round(_sugarKg, 0));
             t.Write("SUGAR_FEEDER_SPD", Math.Round(_sugarDrawRateKgH, 1));
             t.Write("SUGAR_FEEDER_RUN", _sugarDrawTailSec > 0);
+            _cmSugarFeeder.Update(_sugarDrawTailSec > 0, 0.6, false, dt.TotalSeconds);
+            t.Write("SUGAR_FEEDER_FAULT", false);
+            _cmSugarFeeder.Publish(t, vibration: "SUGAR_FEEDER_VIB", bearingTemp: "SUGAR_FEEDER_BRGTEMP",
+                mcsa: "SUGAR_FEEDER_MCSA", failureCount: "SUGAR_FEEDER_FAILCNT");
 
             t.Write("SALT_BIN_WT", Math.Round(_saltKg, 0));
             t.Write("SALT_FEEDER_SPD", Math.Round(_saltDrawRateKgH, 1));
             t.Write("SALT_FEEDER_RUN", _saltDrawTailSec > 0);
+            _cmSaltFeeder.Update(_saltDrawTailSec > 0, 0.6, false, dt.TotalSeconds);
+            t.Write("SALT_FEEDER_FAULT", false);
+            _cmSaltFeeder.Publish(t, vibration: "SALT_FEEDER_VIB", bearingTemp: "SALT_FEEDER_BRGTEMP",
+                mcsa: "SALT_FEEDER_MCSA", failureCount: "SALT_FEEDER_FAILCNT");
 
             t.Write("SPICE_BIN_WT", Math.Round(_spiceKg, 1));
             t.Write("SPICE_FEEDER_RUN", _spiceDrawTailSec > 0);

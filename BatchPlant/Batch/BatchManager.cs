@@ -88,6 +88,11 @@ namespace BatchPlant.Batch
         private int _batchCounterForDate;
         private DateTime _counterDate;
         private int _batchesToday;
+        private int _batchesThisShift;
+        private int _goodBatchesThisShift;
+        private int _scrapBatchesThisShift;
+        private ShiftType _lastShift;
+        private bool _shiftInit;
 
         // Retain recent completed records for inspection
         private readonly List<BatchRecord> _completedRecords = new();
@@ -132,6 +137,17 @@ namespace BatchPlant.Batch
                 _counterDate = simNow.Date;
                 _batchCounterForDate = 0;
                 _batchesToday = 0;
+            }
+
+            // Reset the per-shift batch counters at each shift change.
+            ShiftType shift = _ctx.Clock.CurrentShift;
+            if (!_shiftInit || shift != _lastShift)
+            {
+                _shiftInit = true;
+                _lastShift = shift;
+                _batchesThisShift = 0;
+                _goodBatchesThisShift = 0;
+                _scrapBatchesThisShift = 0;
             }
 
             // Observe each area's state and handle transitions
@@ -357,12 +373,18 @@ namespace BatchPlant.Batch
                     }
                 }
 
+                double phaseElapsedSec = phaseStart.HasValue ? (simNow - phaseStart.Value).TotalSeconds : 0.0;
+
                 t.Write("BATCH_PHASE", phaseLabel);
                 if (phaseStart.HasValue)
                 {
-                    t.Write("BATCH_PHASE_TMR", Math.Round((simNow - phaseStart.Value).TotalSeconds, 0));
+                    t.Write("BATCH_PHASE_TMR", Math.Round(phaseElapsedSec, 0));
                 }
                 t.Write("BATCH_START_TIME", primary.Record.StartTime);
+
+                // BatchLine-folder view of the active phase
+                t.Write("BATCH_LINE_CURRENT_PHASE", phaseLabel);
+                t.Write("BATCH_LINE_PHASE_ELAPSED", Math.Round(phaseElapsedSec, 0));
             }
             else
             {
@@ -371,6 +393,9 @@ namespace BatchPlant.Batch
                 t.Write("CURRENT_BATCH_ID", "");
                 t.Write("BATCH_PHASE", "");
                 t.Write("BATCH_PHASE_TMR", 0.0);
+
+                t.Write("BATCH_LINE_CURRENT_PHASE", "");
+                t.Write("BATCH_LINE_PHASE_ELAPSED", 0.0);
             }
 
             // Per-area BATCH_ID tags
@@ -379,6 +404,9 @@ namespace BatchPlant.Batch
             t.Write("DA401_BATCH_ID", _byArea.TryGetValue(Area400, out var da) ? da.Record.BatchId : "");
 
             t.Write("BATCHES_TODAY", _batchesToday);
+            t.Write("BATCHES_SHIFT", _batchesThisShift);
+            t.Write("BATCH_LINE_GOOD_BATCHES_SHIFT", _goodBatchesThisShift);
+            t.Write("BATCH_LINE_SCRAP_BATCHES_SHIFT", _scrapBatchesThisShift);
         }
 
         /// <summary>
@@ -392,6 +420,16 @@ namespace BatchPlant.Batch
             batch.Record.CurrentStage = BatchStage.Complete;
 
             _batchesToday++;
+            _batchesThisShift++;
+
+            // Good vs scrap: a batch is good if it completed cleanly with no recorded
+            // deviations or alarms; otherwise it counts as scrap/rework.
+            bool good = batch.Record.Status == BatchStatus.Complete
+                        && batch.Record.Deviations.Count == 0
+                        && batch.Record.Alarms.Count == 0;
+            if (good) _goodBatchesThisShift++;
+            else _scrapBatchesThisShift++;
+
             _completedRecords.Add(batch.Record);
             if (_completedRecords.Count > MaxRetainedRecords)
                 _completedRecords.RemoveAt(0);
