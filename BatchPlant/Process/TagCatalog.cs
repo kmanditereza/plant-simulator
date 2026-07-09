@@ -328,6 +328,14 @@ namespace BatchPlant.Process
             tags.Define("BT453_AGIT_MCSA", BuiltInType.Double, bt3, "%", "BT453 Agitator Motor Current Signature Index", 0.0);
             tags.Define("BT453_AGIT_FAULT", BuiltInType.Boolean, bt3, description: "BT453 Agitator Fault");
             tags.Define("BT453_AGIT_FAILCNT", BuiltInType.Int32, bt3, description: "BT453 Agitator Cumulative Failure Count", initialValue: 0);
+
+            // --- Tank occupancy + bulk-batch attribution (one batch per tank; buffer→pack genealogy) ---
+            tags.Define("BT451_STATE", BuiltInType.Int32, bt1, description: "BT451 State (0=Empty,1=Filling,2=Ready,3=Draining)", initialValue: 0);
+            tags.Define("BT451_BATCH_ID", BuiltInType.String, bt1, description: "BT451 Held Bulk Batch (produced batch no.)", initialValue: "");
+            tags.Define("BT452_STATE", BuiltInType.Int32, bt2, description: "BT452 State (0=Empty,1=Filling,2=Ready,3=Draining)", initialValue: 0);
+            tags.Define("BT452_BATCH_ID", BuiltInType.String, bt2, description: "BT452 Held Bulk Batch (produced batch no.)", initialValue: "");
+            tags.Define("BT453_STATE", BuiltInType.Int32, bt3, description: "BT453 State (0=Empty,1=Filling,2=Ready,3=Draining)", initialValue: 0);
+            tags.Define("BT453_BATCH_ID", BuiltInType.String, bt3, description: "BT453 Held Bulk Batch (produced batch no.)", initialValue: "");
         }
 
         private static void RegisterArea500(TagRegistry tags)
@@ -669,6 +677,8 @@ namespace BatchPlant.Process
             tags.Define("BATCH_COMPLETED", BuiltInType.Boolean, p, description: "Batch Completed flag - true when batch finishes, reset via POST /api/batch/completed/ack", writable: true);
             tags.Define("WO_COMPLETED", BuiltInType.Boolean, p, description: "Work Order Completed flag - true when batch finishes, reset via POST /api/work-order/completed/ack", writable: true);
             tags.Define("BATCH_RELEASED", BuiltInType.Boolean, p, description: "Batch Released flag - true when batch is QA released, reset via POST /api/batch/released/ack", writable: true);
+            tags.Define("PACK_ORDER_COMPLETED", BuiltInType.Boolean, p, description: "Packaging Run Completed flag - true when a packaging order finishes, reset via POST /api/packaging/completed/ack", writable: true);
+            tags.Define("BATCH_LINE_QUEUED", BuiltInType.Boolean, p, description: "Batch line holding new-batch starts because all buffer tanks are full", initialValue: false);
             tags.Define("BATCH_ID", BuiltInType.String, p, description: "Current Batch ID", initialValue: "");
             tags.Define("BATCH_STATUS", BuiltInType.String, p, description: "Batch Status", initialValue: "IDLE");
             tags.Define("BATCH_PHASE", BuiltInType.String, p, description: "Current Batch Phase", initialValue: "");
@@ -756,6 +766,18 @@ namespace BatchPlant.Process
             tags.Define("BOTTLES_SHIFT", BuiltInType.Int32, p, description: "Bottles Produced This Shift", initialValue: 0);
             tags.Define("CASES_TODAY", BuiltInType.Int32, p, description: "Cases Packed Today", initialValue: 0);
             tags.Define("PALLETS_TODAY", BuiltInType.Int32, p, description: "Pallets Complete Today", initialValue: 0);
+
+            // --- Active packaging order (make/pack split: the pack line is gated on an order) ---
+            tags.Define("PACK_ORD_ID", BuiltInType.String, p, description: "Active Packaging Order Number ('' = idle, no order)", initialValue: "");
+            tags.Define("PACK_ORD_WO", BuiltInType.String, p, description: "Active Packaging Work Order Id", initialValue: "");
+            tags.Define("PACK_ORD_SKU", BuiltInType.String, p, description: "Active Packaging Order Finished-Good SKU", initialValue: "");
+            tags.Define("PACK_ORD_SOURCE_BULK", BuiltInType.String, p, description: "Active Packaging Order Source Bulk Material", initialValue: "");
+            tags.Define("PACK_ORD_STATE", BuiltInType.Int32, p, description: "Packaging Order State (line PackML state; 2=Complete pulse on finish)", initialValue: 1);
+            tags.Define("PACK_ORD_TARGET_CASES", BuiltInType.Int32, p, "cases", "Packaging Order Target (cases)", 0);
+            tags.Define("PACK_ORD_CASES_DONE", BuiltInType.Int32, p, "cases", "Cases Produced for Active Packaging Order", 0);
+            tags.Define("PACK_ORD_BOTTLES_DONE", BuiltInType.Int32, p, "bottles", "Bottles Produced for Active Packaging Order", 0);
+            tags.Define("PACK_ORD_PALLETS_DONE", BuiltInType.Int32, p, "pallets", "Pallets Produced for Active Packaging Order", 0);
+            tags.Define("PACK_ORD_PROGRESS_PCT", BuiltInType.Double, p, "%", "Active Packaging Order Progress", 0.0);
 
             // Production quality counts (line-level, aggregated from constituent machines)
             tags.Define("PACK_LINE_GOOD_UNITS_SHIFT", BuiltInType.Int32, p, "units", "Good Units Produced This Shift", 0);

@@ -1,3 +1,4 @@
+using BatchPlant.Api;
 using BatchPlant.Core;
 using BatchPlant.Equipment;
 using BatchPlant.OpcUa;
@@ -24,6 +25,15 @@ namespace BatchPlant.Process
     {
         private readonly PlantContext _ctx;
         private readonly Area450_BufferTanksController _buffers;
+        private readonly PackagingOrderQueue? _packagingQueue;
+        private ApiServer? _apiServer;
+
+        // --- Active packaging order (gates the line) ---
+        private PackagingInstruction? _order;
+        private int _orderBottlesProduced;
+        private DateTime? _orderStarted;
+        // Material genealogy: bottles produced per bulk batch drawn from the buffer.
+        private readonly Dictionary<string, double> _bottlesByBatch = new();
 
         // Equipment
         public PistonFiller Filler { get; }
@@ -76,10 +86,12 @@ namespace BatchPlant.Process
 
         private bool _initialized;
 
-        public Area500_FillingLineController(PlantContext ctx, Area450_BufferTanksController buffers)
+        public Area500_FillingLineController(PlantContext ctx, Area450_BufferTanksController buffers,
+                                             PackagingOrderQueue? packagingQueue = null)
         {
             _ctx = ctx;
             _buffers = buffers;
+            _packagingQueue = packagingQueue;
 
             _cmCapper = new ConditionMonitor(ctx) { BaseVibration = 1.6, BearingRise = 30 };
             _cmCapper.SeedHours(250);
@@ -131,12 +143,33 @@ namespace BatchPlant.Process
                 _bottlesThisShift = 0;
             }
 
+            // 0. Gate on a packaging order. The pack line no longer runs continuously —
+            //    it draws a dequeued packaging order to completion, then idles.
+            if (_order == null && _packagingQueue != null)
+            {
+                var next = _packagingQueue.TryDequeue();
+                if (next != null)
+                {
+                    _order = next;
+                    _order.StartedAt = simNow;
+                    _orderStarted = simNow;
+                    _orderBottlesProduced = 0;
+                    _bottlesByBatch.Clear();
+                    Console.WriteLine($"[{simNow:HH:mm:ss}] Area 500: Starting packaging order {_order.PackagingOrderNumber} " +
+                                      $"({_order.TargetCases} cases x {_order.BottlesPerCase} of {_order.Sku})");
+                }
+            }
+
             // 1. Determine what the line SHOULD be doing based on conditions
             double hotProductAvailableL = _buffers.TotalHotProductL();
             bool productAvailable = hotProductAvailableL > 50; // need minimum supply
 
             OperationalState desiredState;
-            if (Filler.IsFaulted)
+            if (_order == null)
+            {
+                desiredState = OperationalState.Idle;   // no packaging order — line idle
+            }
+            else if (Filler.IsFaulted)
             {
                 desiredState = OperationalState.UnplannedDowntime;
             }
@@ -168,10 +201,11 @@ namespace BatchPlant.Process
 
             if (_lineState == OperationalState.Running)
             {
-                // Draw product from buffer tanks (at consumption rate)
+                // Draw product from ONE buffer tank (one bulk batch at a time) and record
+                // which batch it came from for the packaging order's material genealogy.
                 double consumptionLpm = TargetBpm * BottleWeightG / ProductDensityKgL / 1000.0;
                 double drawVolume = consumptionLpm * dtMin;
-                _buffers.DrawProduct(drawVolume);
+                var (_, drawnBatchId) = _buffers.DrawFromOneBatch(drawVolume);
 
                 // Update product temperature from buffer average (accounting for slight cooling during transfer)
                 _productTempC = Math.Max(82, _buffers.AverageProductTempC() - 1.5);
@@ -184,13 +218,24 @@ namespace BatchPlant.Process
                 _bottlesTodayCounter += filled;
                 _bottlesThisShift += filled;
 
+                // Packaging-order counters + genealogy attribution
+                _orderBottlesProduced += filled;
+                if (filled > 0 && !string.IsNullOrEmpty(drawnBatchId))
+                {
+                    _bottlesByBatch.TryGetValue(drawnBatchId, out var cur);
+                    _bottlesByBatch[drawnBatchId] = cur + filled;
+                }
+
                 _lineSpeed = Filler.ActualRate;
                 _runtimeMinToday += dtMin;
+
+                CheckOrderCompletion(simNow);
             }
             else
             {
                 _lineSpeed = 0;
-                _downtimeMinToday += dtMin;
+                // Only count downtime while an order is active (idle-with-no-order is not a loss).
+                if (_order != null) _downtimeMinToday += dtMin;
             }
 
             // 3. Update tunnel temperature profiles
@@ -287,6 +332,21 @@ namespace BatchPlant.Process
             t.Write("BOTTLES_TODAY", _bottlesTodayCounter);
             t.Write("BOTTLES_SHIFT", _bottlesThisShift);
 
+            // Active packaging order progress (cases as the ordering unit; bottles + pallets reported too)
+            int casesDone = _order != null && _order.BottlesPerCase > 0 ? _orderBottlesProduced / _order.BottlesPerCase : 0;
+            t.Write("PACK_ORD_ID", _order?.PackagingOrderNumber ?? "");
+            t.Write("PACK_ORD_WO", _order?.WorkOrderId ?? "");
+            t.Write("PACK_ORD_SKU", _order?.Sku ?? "");
+            t.Write("PACK_ORD_SOURCE_BULK", _order?.SourceBulkMaterial ?? "");
+            t.Write("PACK_ORD_STATE", (int)_lineState);
+            t.Write("PACK_ORD_TARGET_CASES", _order != null ? (int)_order.TargetCases : 0);
+            t.Write("PACK_ORD_CASES_DONE", casesDone);
+            t.Write("PACK_ORD_BOTTLES_DONE", _orderBottlesProduced);
+            t.Write("PACK_ORD_PALLETS_DONE", _order != null && _order.CasesPerPallet > 0 ? casesDone / _order.CasesPerPallet : 0);
+            t.Write("PACK_ORD_PROGRESS_PCT", _order != null && _order.TargetCases > 0
+                ? Math.Round(Math.Min(100.0, casesDone / _order.TargetCases * 100.0), 1) : 0.0);
+            t.Write("PACK_LINE_CURRENT_SKU", _order?.Sku ?? "");
+
             // Cycle time (seconds per unit) derived from current line speed.
             // Line-global (whole line runs synchronized at this speed); good/scrap
             // unit aggregates are published by Area 600 once all stations are tallied.
@@ -321,6 +381,48 @@ namespace BatchPlant.Process
             _coolZoneInTemp = _ctx.AddNoise(_coolZoneInTemp, 0.3);
             _coolZoneMidTemp = _ctx.AddNoise(_coolZoneMidTemp, 0.3);
             _coolZoneOutTemp = _ctx.AddNoise(_coolZoneOutTemp, 0.3);
+        }
+
+        /// <summary>Wire the API server so completed packaging runs can be served to the UNS.</summary>
+        public void ConnectApiServer(ApiServer apiServer) => _apiServer = apiServer;
+
+        /// <summary>
+        /// Complete the packaging order once enough FULL cases have been made (a partial
+        /// case in progress is overpacked, i.e. only whole cases count). Builds the
+        /// PackagingRunCompleted event (with genealogy), latches the OPC UA flag the
+        /// plant_ot_to_uns bridge polls, and releases the line to the next order.
+        /// </summary>
+        private void CheckOrderCompletion(DateTime simNow)
+        {
+            if (_order == null) return;
+            int producedCases = _order.BottlesPerCase > 0 ? _orderBottlesProduced / _order.BottlesPerCase : 0;
+            if (producedCases < _order.TargetCases) return;
+
+            int producedBottles = producedCases * _order.BottlesPerCase;  // whole cases only
+            int producedPallets = _order.CasesPerPallet > 0 ? producedCases / _order.CasesPerPallet : 0;
+
+            var consumed = _bottlesByBatch.Select(kv => new ConsumedBatch
+            {
+                ProducedBatch = kv.Key,
+                BulkMaterial  = _order.SourceBulkMaterial,
+                BottlesDrawn  = kv.Value,
+                CasesProduced = _order.BottlesPerCase > 0 ? Math.Floor(kv.Value / _order.BottlesPerCase) : 0
+            }).ToList();
+
+            _apiServer?.SetPackagingCompletedEvent(_order, producedBottles, producedCases, producedPallets,
+                                                   consumed, _orderStarted, simNow);
+            _ctx.Tags.Write("PACK_ORDER_COMPLETED", true);
+            _ctx.Tags.Write("PACK_ORD_STATE", 2); // Complete
+
+            Console.WriteLine($"[{simNow:HH:mm:ss}] Area 500: Packaging order {_order.PackagingOrderNumber} COMPLETE — " +
+                              $"{producedCases} cases / {producedBottles} bottles / {producedPallets} pallets; " +
+                              $"consumed batches: {string.Join(", ", _bottlesByBatch.Keys.Where(k => !string.IsNullOrEmpty(k)))}");
+
+            _packagingQueue?.MarkComplete(simNow);
+            _order = null;
+            _orderBottlesProduced = 0;
+            _bottlesByBatch.Clear();
+            _orderStarted = null;
         }
 
         private void PublishStationPackML(string prefix, OperationalState state, OperationalMode mode, double stateDurSec, double modeDurSec)

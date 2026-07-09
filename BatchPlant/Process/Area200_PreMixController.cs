@@ -64,6 +64,8 @@ namespace BatchPlant.Process
         // Work order integration
         private WorkOrderQueue? _workOrderQueue;
         private BatchInstruction? _activeInstruction;
+        // Buffer-capacity gate: don't start a new batch if the buffer tanks are all full.
+        private Func<bool>? _canStartBatch;
 
         public Area200_PreMixController(PlantContext ctx, Area100_RawMaterialsController rawMaterials)
         {
@@ -128,6 +130,16 @@ namespace BatchPlant.Process
         public void ConnectWorkOrderQueue(WorkOrderQueue queue)
         {
             _workOrderQueue = queue;
+        }
+
+        /// <summary>
+        /// Gate new-batch starts on downstream buffer availability. The batch line queues
+        /// work orders (holds in Idle) while all three buffer tanks are full — the pack
+        /// line must draw one down before the next batch can start.
+        /// </summary>
+        public void ConnectBufferGate(Func<bool> canStartBatch)
+        {
+            _canStartBatch = canStartBatch;
         }
 
         /// <summary>The currently executing instruction, if started via work order.</summary>
@@ -224,10 +236,18 @@ namespace BatchPlant.Process
                 case CycleState.Idle:
                     if (_workOrderQueue != null)
                     {
+                        // Hold if the buffer tanks can't take another batch (all 3 full).
+                        if (_canStartBatch != null && !_canStartBatch())
+                        {
+                            _ctx.Tags.Write("BATCH_LINE_QUEUED", _workOrderQueue.PendingCount > 0);
+                            break; // buffers full — queue work orders
+                        }
+
                         var instruction = _workOrderQueue.TryDequeue();
                         if (instruction == null)
                             break; // wait for work order
 
+                        _ctx.Tags.Write("BATCH_LINE_QUEUED", false);
                         _activeInstruction = instruction;
                         _activeInstruction.StartedAt = simNow;
                         LoadInstructionParameters(instruction);

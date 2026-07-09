@@ -24,14 +24,17 @@ namespace BatchPlant.Api
     {
         private readonly Dictionary<string, JsonObject> _recipes = new();
         private readonly WorkOrderQueue _queue;
+        private readonly PackagingOrderQueue? _packagingQueue;
         private readonly OpcUa.TagRegistry? _tags;
         private readonly List<string> _eventLog = new();
+        private readonly HashSet<string> _seenPackagingOrders = new();
         private readonly object _lock = new();
 
-        public ApiServer(WorkOrderQueue queue, OpcUa.TagRegistry? tags = null)
+        public ApiServer(WorkOrderQueue queue, OpcUa.TagRegistry? tags = null, PackagingOrderQueue? packagingQueue = null)
         {
             _queue = queue;
             _tags = tags;
+            _packagingQueue = packagingQueue;
         }
 
         // Event storage (set by processing, read/ack by external systems)
@@ -43,6 +46,7 @@ namespace BatchPlant.Api
         private object? _batchCompletedEvent;
         private object? _woCompletedEvent;
         private object? _batchReleasedEvent;
+        private object? _packagingCompletedEvent;
         private readonly object _eventLock = new();
 
         // Phase sequence counter per batch
@@ -70,6 +74,10 @@ namespace BatchPlant.Api
             app.MapPost("/api/work-order/completed/ack", HandleAckWoCompleted);
             app.MapGet("/api/batch/released", HandleGetBatchReleased);
             app.MapPost("/api/batch/released/ack", HandleAckBatchReleased);
+            // Packaging (make/pack split)
+            app.MapPost("/api/packaging-order", HandlePackagingOrder);
+            app.MapGet("/api/packaging/completed", HandleGetPackagingCompleted);
+            app.MapPost("/api/packaging/completed/ack", HandleAckPackagingCompleted);
         }
 
         // ---- Helper: common event envelope fields ----
@@ -1178,6 +1186,170 @@ namespace BatchPlant.Api
             _tags?.Write("BATCH_RELEASED", false);
             Console.WriteLine("[API] BATCH_RELEASED acknowledged and reset");
             return Results.Ok(new { status = "acknowledged", batchReleased = false });
+        }
+
+        // ================= Packaging (make/pack split) =================
+
+        private IResult HandlePackagingOrder(HttpContext ctx)
+        {
+            if (_packagingQueue == null)
+                return Results.StatusCode(503); // packaging not wired
+
+            using var reader = new StreamReader(ctx.Request.Body);
+            var body = reader.ReadToEndAsync().Result;
+
+            JsonObject? doc;
+            try { doc = JsonNode.Parse(body)?.AsObject(); }
+            catch (Exception ex) { return Results.BadRequest(new { error = "Invalid JSON", detail = ex.Message }); }
+            if (doc == null) return Results.BadRequest(new { error = "Empty or invalid JSON body" });
+
+            // The Node-RED dispatch flow posts the packaging fields at the root.
+            var data = doc["data"]?.AsObject() ?? doc;
+
+            var pkgNo = data["packagingOrderNumber"]?.GetValue<string>();
+            var woId  = data["workOrderId"]?.GetValue<string>();
+            if (string.IsNullOrEmpty(pkgNo)) return Results.BadRequest(new { error = "Missing packagingOrderNumber" });
+            if (string.IsNullOrEmpty(woId))  return Results.BadRequest(new { error = "Missing workOrderId" });
+
+            double GetNum(string key, double dflt)
+            {
+                var n = data[key];
+                if (n == null) return dflt;
+                try { return n.GetValue<double>(); } catch { try { return double.Parse(n.ToString()); } catch { return dflt; } }
+            }
+
+            var isa = data["isa95Context"]?.AsObject();
+
+            var instr = new PackagingInstruction
+            {
+                PackagingOrderNumber = pkgNo,
+                WorkOrderId          = woId,
+                ControlRecipeNumber  = data["controlRecipeNumber"]?.GetValue<string>() ?? "",
+                Sku                  = data["sku"]?.GetValue<string>() ?? "",
+                SourceBulkMaterial   = data["sourceBulkMaterial"]?.GetValue<string>() ?? "",
+                UnitOfMeasure        = data["unitOfMeasure"]?.GetValue<string>() ?? "CASE",
+                TargetCases          = GetNum("targetQuantity", 0),
+                BottlesPerCase       = (int)GetNum("bottlesPerCase", 24),
+                CasesPerPallet       = (int)GetNum("casesPerPallet", 60),
+                CustomerId           = data["customer"]?["customerId"]?.GetValue<string>() ?? "",
+                CustomerName         = data["customer"]?["customerName"]?.GetValue<string>() ?? "",
+                Enterprise           = isa?["enterprise"]?.GetValue<string>() ?? "GlobalIndustries",
+                Site                 = isa?["site"]?.GetValue<string>() ?? "Munich",
+                Area                 = isa?["area"]?.GetValue<string>() ?? "PackagingArea",
+                ProcessCell          = isa?["processCell"]?.GetValue<string>() ?? "Line1",
+                ReceivedAt           = DateTime.UtcNow
+            };
+
+            if (!(instr.TargetCases > 0))
+                return Results.BadRequest(new { error = "targetQuantity (cases) must be > 0" });
+
+            // Idempotency: the dispatched event is retained, so a re-subscribe (e.g. Node-RED
+            // restart) can redeliver it. Ignore a packaging order we've already accepted so
+            // the same order never runs — and double-counts — twice.
+            lock (_lock)
+            {
+                if (!_seenPackagingOrders.Add(pkgNo))
+                {
+                    Console.WriteLine($"[API] Packaging order {pkgNo} already accepted — ignoring duplicate dispatch");
+                    return Results.Ok(new { status = "duplicate-ignored", packagingOrderNumber = pkgNo });
+                }
+            }
+
+            _packagingQueue.Enqueue(instr);
+            lock (_lock) { LogEvent($"Packaging order dispatched: {pkgNo} ({instr.TargetCases} cases of {instr.Sku})"); }
+            Console.WriteLine($"[API] Packaging order dispatched: {pkgNo} -> {woId} " +
+                $"({instr.TargetCases} cases x {instr.BottlesPerCase} btl of {instr.Sku})" +
+                $" (pkgQueue={_packagingQueue.PendingCount})");
+
+            return Results.Ok(new
+            {
+                status = "queued",
+                packagingOrderNumber = pkgNo,
+                workOrderId = woId,
+                targetCases = instr.TargetCases,
+                queueDepth = _packagingQueue.PendingCount
+            });
+        }
+
+        /// <summary>
+        /// Called by Area 500 when a packaging order completes. Pre-builds the
+        /// PackagingRunCompleted event (with material genealogy) that the plant_ot_to_uns
+        /// bridge serves to the UNS. Mirrors SetBatchReleasedEvent.
+        /// </summary>
+        public void SetPackagingCompletedEvent(
+            PackagingInstruction instr,
+            long producedBottles, long producedCases, long producedPallets,
+            IEnumerable<ConsumedBatch> consumedBatches,
+            DateTime? startedAt, DateTime simNow)
+        {
+            var consumed = consumedBatches.Select(cb => new
+            {
+                producedBatch = cb.ProducedBatch,
+                bulkMaterial  = cb.BulkMaterial,
+                bottlesDrawn  = Math.Round(cb.BottlesDrawn, 0),
+                casesProduced = Math.Round(cb.CasesProduced, 1)
+            }).ToArray<object>();
+
+            lock (_eventLock)
+            {
+                _packagingCompletedEvent = new
+                {
+                    eventType = "PackagingRunCompleted",
+                    eventId = $"EVT-PKG-RUN-{instr.PackagingOrderNumber}",
+                    eventVersion = "2.0",
+                    timestamp = simNow.ToString("o"),
+                    source = new
+                    {
+                        origin = "MES-PackagingManager",
+                        uri = "https://mes.globalindustries.com/packaging-manager"
+                    },
+                    correlationId = $"packagingorder-{instr.PackagingOrderNumber}",
+                    data = new
+                    {
+                        packagingOrderNumber = instr.PackagingOrderNumber,
+                        workOrderId = instr.WorkOrderId,
+                        controlRecipeNumber = instr.ControlRecipeNumber,
+                        sku = instr.Sku,
+                        sourceBulkMaterial = instr.SourceBulkMaterial,
+                        unitOfMeasure = instr.UnitOfMeasure,
+                        targetQuantity = instr.TargetCases,
+                        producedQuantity = producedCases,
+                        producedBottles = producedBottles,
+                        producedPallets = producedPallets,
+                        bottlesPerCase = instr.BottlesPerCase,
+                        casesPerPallet = instr.CasesPerPallet,
+                        customer = new { customerId = instr.CustomerId, customerName = instr.CustomerName },
+                        isa95Context = new
+                        {
+                            enterprise = instr.Enterprise,
+                            site = instr.Site,
+                            area = instr.Area,
+                            processCell = instr.ProcessCell
+                        },
+                        startedAt = startedAt?.ToString("o"),
+                        completedAt = simNow.ToString("o"),
+                        // Material genealogy: the bulk batch(es) drawn from the buffer.
+                        consumedBatches = consumed
+                    }
+                };
+            }
+        }
+
+        private IResult HandleGetPackagingCompleted(HttpContext ctx)
+        {
+            lock (_eventLock)
+            {
+                if (_packagingCompletedEvent == null) return Results.Ok(new { completed = false });
+                return Results.Ok(_packagingCompletedEvent);
+            }
+        }
+
+        private IResult HandleAckPackagingCompleted(HttpContext ctx)
+        {
+            lock (_eventLock) { _packagingCompletedEvent = null; }
+            _tags?.Write("PACK_ORDER_COMPLETED", false);
+            Console.WriteLine("[API] PACK_ORDER_COMPLETED acknowledged and reset");
+            return Results.Ok(new { status = "acknowledged", packagingCompleted = false });
         }
 
         private void LogEvent(string message)

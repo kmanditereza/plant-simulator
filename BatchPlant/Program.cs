@@ -84,6 +84,8 @@ namespace BatchPlant
 
                 // Work Order Queue - receives instructions from HTTP API
                 var workOrderQueue = new WorkOrderQueue();
+                // Packaging Order Queue - gates the pack line (make/pack split)
+                var packagingQueue = new PackagingOrderQueue();
 
                 // Area 200: Pre-Mix (depends on Area 100 for ingredients, IProductSource for Area 300)
                 var area200 = new Area200_PreMixController(ctx, area100);
@@ -96,6 +98,9 @@ namespace BatchPlant
                 engine.Register(area450);
                 Console.WriteLine("[AREA450] Buffer tanks controller registered (BT-451, BT-452, BT-453)");
 
+                // Gate the batch line: hold new-batch starts while all buffer tanks are full.
+                area200.ConnectBufferGate(() => area450.HasCapacityForNewBatch());
+
                 // Area 300: Cooking (depends on Area 800 for steam, Area 200 for upstream product)
                 var area300 = new Area300_CookingController(ctx, area800, area200);
                 engine.Register(area300);
@@ -106,8 +111,8 @@ namespace BatchPlant
                 engine.Register(area400);
                 Console.WriteLine("[AREA400] Processing controller registered (DA-401 vacuum, HG-401 homogenizer)");
 
-                // Area 500: Filling line (consumes from Area 450 buffer tanks)
-                var area500 = new Area500_FillingLineController(ctx, area450);
+                // Area 500: Filling line (gated on a packaging order; draws from Area 450 buffers)
+                var area500 = new Area500_FillingLineController(ctx, area450, packagingQueue);
                 engine.Register(area500);
                 Console.WriteLine("[AREA500] Filling line controller registered (FL-501, CAP-501, inv/cool tunnels, CONV-501)");
 
@@ -145,8 +150,9 @@ namespace BatchPlant
                 if (!string.IsNullOrEmpty(apiPortEnv) && int.TryParse(apiPortEnv, out var parsedPort))
                     apiPort = parsedPort;
 
-                var apiServer = new ApiServer(workOrderQueue, tags);
+                var apiServer = new ApiServer(workOrderQueue, tags, packagingQueue);
                 batchManager.ConnectApiServer(apiServer);
+                area500.ConnectApiServer(apiServer);
                 var builder = WebApplication.CreateBuilder();
                 builder.WebHost.UseUrls($"http://0.0.0.0:{apiPort}");
                 builder.Logging.ClearProviders(); // don't pollute console with ASP.NET logs
@@ -157,6 +163,8 @@ namespace BatchPlant
                 Console.WriteLine($"[API] HTTP API started on port {apiPort}");
                 Console.WriteLine($"[API]   POST /api/control-recipe  - Download control recipe");
                 Console.WriteLine($"[API]   POST /api/work-order      - Dispatch work order");
+                Console.WriteLine($"[API]   POST /api/packaging-order - Dispatch packaging order (gates pack line)");
+                Console.WriteLine($"[API]   GET  /api/packaging/completed - Poll completed packaging run");
                 Console.WriteLine($"[API]   GET  /api/status          - Queue and batch status");
 
                 // Write initial sim metadata

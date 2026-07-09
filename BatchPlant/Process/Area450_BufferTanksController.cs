@@ -61,24 +61,66 @@ namespace BatchPlant.Process
         /// Picks a tank: prefers one already in Filling state, otherwise an Empty one.
         /// Returns the actual volume accepted (0 if no tank is available).
         /// </summary>
-        public double AcceptProduct(double volumeL, double tempC)
+        public double AcceptProduct(double volumeL, double tempC, string batchId = "")
         {
-            // Prefer tank already being filled (don't spread across multiple)
+            // One batch per tank: prefer a tank already being filled with THIS batch.
             var already = FindFillingTank();
-            if (already != null)
+            if (already != null && (already.BatchId == batchId || string.IsNullOrEmpty(already.BatchId)))
             {
-                double accepted = already.ExternalFill(volumeL, tempC);
+                double accepted = already.ExternalFill(volumeL, tempC, batchId);
                 if (accepted > 0) return accepted;
             }
 
-            // Otherwise pick an empty tank and start filling it
+            // Otherwise pick an empty tank and dedicate it to this batch.
             var empty = FindEmptyTank();
             if (empty != null)
             {
-                return empty.ExternalFill(volumeL, tempC);
+                return empty.ExternalFill(volumeL, tempC, batchId);
             }
 
             return 0; // all tanks full or draining
+        }
+
+        /// <summary>
+        /// True while at least one tank is Empty and can accept a new batch. The batch
+        /// line gates new-batch starts on this so it never cooks bulk with nowhere to buffer.
+        /// </summary>
+        public bool HasCapacityForNewBatch() => EmptyTankCount() > 0;
+
+        public int EmptyTankCount()
+        {
+            int n = 0;
+            foreach (var tank in new[] { _bt451, _bt452, _bt453 })
+                if (tank.TankState == BufferTankState.Empty) n++;
+            return n;
+        }
+
+        /// <summary>
+        /// Draw for the pack line from a SINGLE buffer tank (one bulk batch at a time).
+        /// Finishes a Draining tank before switching to a fresh Ready one. Returns the
+        /// volume drawn and the produced-batch id it came from (for genealogy).
+        /// </summary>
+        public (double drawn, string batchId) DrawFromOneBatch(double volumeL, double minTempC = MinHoldTempC)
+        {
+            // Finish the tank we're already draining first.
+            foreach (var tank in new[] { _bt451, _bt452, _bt453 })
+            {
+                if (tank.TankState == BufferTankState.Draining && tank.VesselTemp >= minTempC)
+                {
+                    double taken = tank.ExternalDraw(volumeL);
+                    if (taken > 0) return (taken, tank.BatchId);
+                }
+            }
+            // Otherwise start on the next Ready tank.
+            foreach (var tank in new[] { _bt451, _bt452, _bt453 })
+            {
+                if (tank.TankState == BufferTankState.Ready && tank.VesselTemp >= minTempC)
+                {
+                    double taken = tank.ExternalDraw(volumeL);
+                    if (taken > 0) return (taken, tank.BatchId);
+                }
+            }
+            return (0, "");
         }
 
         /// <summary>
@@ -171,6 +213,8 @@ namespace BatchPlant.Process
             public BufferTankState TankState { get; private set; } = BufferTankState.Empty;
             public double VesselLevel => _vessel.Level;
             public double VesselTemp => _vessel.Temperature;
+            // The produced-batch number of the bulk currently held (one batch per tank).
+            public string BatchId { get; private set; } = "";
 
             private DateTime _lastFillTime;
             private DateTime _lastDrawTime;
@@ -209,7 +253,7 @@ namespace BatchPlant.Process
             /// Area 400 pushes product into this tank. Transitions Empty → Filling.
             /// Returns volume actually accepted.
             /// </summary>
-            public double ExternalFill(double volumeL, double tempC)
+            public double ExternalFill(double volumeL, double tempC, string batchId = "")
             {
                 if (TankState == BufferTankState.Draining) return 0;
                 if (_vessel.Level >= TankCapacityL) return 0;
@@ -221,8 +265,10 @@ namespace BatchPlant.Process
 
                 if (TankState == BufferTankState.Empty || TankState == BufferTankState.Ready)
                 {
+                    // Dedicate this tank to the batch that first fills it.
+                    if (!string.IsNullOrEmpty(batchId)) BatchId = batchId;
                     TankState = BufferTankState.Filling;
-                    Console.WriteLine($"[{_ctx.Clock.Now:HH:mm:ss}] {_name}: -> Filling");
+                    Console.WriteLine($"[{_ctx.Clock.Now:HH:mm:ss}] {_name}: -> Filling (batch={BatchId})");
                 }
                 return accepted;
             }
@@ -264,7 +310,8 @@ namespace BatchPlant.Process
                         if (_vessel.Level <= TankEmptyThresholdL)
                         {
                             TankState = BufferTankState.Empty;
-                            Console.WriteLine($"[{simNow:HH:mm:ss}] {_name}: -> Empty");
+                            Console.WriteLine($"[{simNow:HH:mm:ss}] {_name}: -> Empty (was batch={BatchId})");
+                            BatchId = ""; // released — available for the next batch
                         }
                         else if ((simNow - _lastDrawTime).TotalSeconds > DrawIdleTimeoutSec)
                         {
@@ -287,6 +334,10 @@ namespace BatchPlant.Process
             {
                 _ctx.Tags.Write(_tValveIn, TankState == BufferTankState.Filling);
                 _ctx.Tags.Write(_tValveOut, TankState == BufferTankState.Draining);
+                // Tank occupancy + which bulk batch it holds (buffer→pack genealogy source)
+                var idBase = _agitBase.Replace("_AGIT", "");   // e.g. "BT451"
+                _ctx.Tags.Write($"{idBase}_STATE", (int)TankState);
+                _ctx.Tags.Write($"{idBase}_BATCH_ID", BatchId);
                 _ctx.Tags.Write(_tAgitRun, _vessel.Level > 100);
                 _ctx.Tags.Write($"{_agitBase}_FAULT", false);
                 _cmAgit.Publish(_ctx.Tags,

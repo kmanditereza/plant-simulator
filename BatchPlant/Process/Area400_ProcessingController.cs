@@ -163,7 +163,10 @@ namespace BatchPlant.Process
             if (_cycle == CycleState.Homogenizing && Deaerator.Level > 10)
             {
                 double desired = HomogFlowLpm * dtSec / 60.0;
-                double accepted = _buffers.AcceptProduct(desired, Deaerator.Temperature);
+                // Tag the buffered product with the batch currently in DA-401 (published by
+                // BatchManager) so the buffer tank carries the bulk-batch genealogy forward.
+                string batchId = _ctx.Tags.Read<string>("DA401_BATCH_ID") ?? "";
+                double accepted = _buffers.AcceptProduct(desired, Deaerator.Temperature, batchId);
                 if (accepted > 0)
                 {
                     Deaerator.RemoveMaterial(accepted);
