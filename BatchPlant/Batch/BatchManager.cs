@@ -28,6 +28,8 @@ namespace BatchPlant.Batch
         private readonly string _outputDir;
         private Func<BatchInstruction?>? _getActiveInstruction;
         private ApiServer? _apiServer;
+        private Process.Area450_BufferTanksController? _buffers;
+        private WorkOrderQueue? _workOrderQueue;
 
         public int Priority => 50; // after area controllers, before tag flusher
 
@@ -91,8 +93,10 @@ namespace BatchPlant.Batch
         private int _batchesThisShift;
         private int _goodBatchesThisShift;
         private int _scrapBatchesThisShift;
-        private ShiftType _lastShift;
+        private int _lastShift;
         private bool _shiftInit;
+        private double _runtimeMinShift;
+        private double _downtimeMinShift;
 
         // Retain recent completed records for inspection
         private readonly List<BatchRecord> _completedRecords = new();
@@ -129,6 +133,24 @@ namespace BatchPlant.Batch
             _apiServer = server;
         }
 
+        /// <summary>
+        /// Connect the Area 450 buffer tanks so the batch line can report the buffer level it
+        /// feeds, and how much good product the current order has delivered into it.
+        /// </summary>
+        public void ConnectBuffers(Process.Area450_BufferTanksController buffers)
+        {
+            _buffers = buffers;
+        }
+
+        /// <summary>
+        /// Connect the work order queue so the batch line can distinguish "blocked" (work is
+        /// waiting but the buffers are full) from "idle" (nothing scheduled).
+        /// </summary>
+        public void ConnectWorkOrderQueue(WorkOrderQueue queue)
+        {
+            _workOrderQueue = queue;
+        }
+
         public void Tick(TimeSpan dt, DateTime simNow)
         {
             // Reset daily counter on date rollover
@@ -139,8 +161,8 @@ namespace BatchPlant.Batch
                 _batchesToday = 0;
             }
 
-            // Reset the per-shift batch counters at each shift change.
-            ShiftType shift = _ctx.Clock.CurrentShift;
+            // Reset the per-shift batch counters at each shift change (incl. a SHIFT_RESET).
+            int shift = _ctx.Clock.CurrentShift;
             if (!_shiftInit || shift != _lastShift)
             {
                 _shiftInit = true;
@@ -148,12 +170,21 @@ namespace BatchPlant.Batch
                 _batchesThisShift = 0;
                 _goodBatchesThisShift = 0;
                 _scrapBatchesThisShift = 0;
+                _runtimeMinShift = 0;
+                _downtimeMinShift = 0;
             }
 
             // Observe each area's state and handle transitions
             ObserveArea(Area200, "MX201_STATE", Area200StateNames, simNow, dt);
             ObserveArea(Area300, "KT301_STATE", Area300StateNames, simNow, dt);
             ObserveArea(Area400, "DA401_STATE", Area400StateNames, simNow, dt);
+
+            // Batch line runtime/downtime for this shift: the line is "running" whenever a
+            // batch is in flight anywhere across Area 200/300/400, otherwise it is idle.
+            // Sampled after ObserveArea so _byArea reflects this tick's transitions.
+            double dtWallMin = _ctx.Clock.SimToWall(dt).TotalMinutes;   // real minutes, matching the shift window
+            if (_byArea.Count > 0) _runtimeMinShift += dtWallMin;
+            else                   _downtimeMinShift += dtWallMin;
 
             // Sample active phase trackers
             foreach (var tracker in _phaseTrackers.Values)
@@ -359,6 +390,16 @@ namespace BatchPlant.Batch
                 t.Write("BATCH_STATUS", primary.Record.Status.ToString());
                 t.Write("CURRENT_BATCH_ID", primary.Record.BatchId);
 
+                // Order identity of the batch on the line. Instruction is null for a batch
+                // started without a work order (legacy auto-start), so fall back to "".
+                t.Write("BATCH_LINE_WORK_ORDER_ID", primary.Instruction?.WorkOrderId ?? "");
+                t.Write("BATCH_LINE_PROCESS_ORDER", primary.Instruction?.ProcessOrderNumber ?? "");
+
+                // Order progress, in kg. "Good qty completed" is the product this batch has
+                // actually delivered into the buffer (cumulative), not the current tank level.
+                t.Write("BATCH_LINE_ORDER_QTY_TARGET", Math.Round(primary.Instruction?.BatchSizeKg ?? 0.0, 2));
+                t.Write("BATCH_LINE_ORDER_QTY_GOOD", Math.Round(_buffers?.DeliveredKgFor(primary.Record.BatchId) ?? 0.0, 2));
+
                 // Determine current phase from the most recent active tracker for the primary's area
                 string currentArea = _byArea.FirstOrDefault(kv => kv.Value == primary).Key ?? "";
                 string phaseLabel = "";
@@ -391,6 +432,10 @@ namespace BatchPlant.Batch
                 t.Write("BATCH_ID", "");
                 t.Write("BATCH_STATUS", "IDLE");
                 t.Write("CURRENT_BATCH_ID", "");
+                t.Write("BATCH_LINE_WORK_ORDER_ID", "");
+                t.Write("BATCH_LINE_PROCESS_ORDER", "");
+                t.Write("BATCH_LINE_ORDER_QTY_TARGET", 0.0);
+                t.Write("BATCH_LINE_ORDER_QTY_GOOD", 0.0);
                 t.Write("BATCH_PHASE", "");
                 t.Write("BATCH_PHASE_TMR", 0.0);
 
@@ -403,10 +448,34 @@ namespace BatchPlant.Batch
             t.Write("KT301_BATCH_ID", _byArea.TryGetValue(Area300, out var kt) ? kt.Record.BatchId : "");
             t.Write("DA401_BATCH_ID", _byArea.TryGetValue(Area400, out var da) ? da.Record.BatchId : "");
 
+            // Buffer the batch line feeds (Area 450, all three tanks), in kg -- same units as
+            // batch size. Published whether or not a batch is currently running.
+            t.Write("BATCH_LINE_UPSTREAM_BUFFER_LEVEL", Math.Round(_buffers?.TotalProductKg() ?? 0.0, 1));
+
+            // Line state + the single downtime flag and its one reason.
+            // Blocked = work orders are waiting but every buffer tank is full, so no batch can start.
+            // Idle    = nothing scheduled; not a loss, so not flagged as downtime.
+            bool running = _byArea.Count > 0;
+            bool ordersPending = (_workOrderQueue?.PendingCount ?? 0) > 0;
+            bool bufferFull = _buffers != null && !_buffers.HasCapacityForNewBatch();
+
+            string reason;
+            bool downtime;
+            if (running)                            { reason = "Running"; downtime = false; }
+            else if (ordersPending && bufferFull)   { reason = "Blocked"; downtime = true; }
+            else                                    { reason = "Idle";    downtime = false; }
+
+            t.Write("BATCH_LINE_RUNNING", running);
+            t.Write("BATCH_LINE_STATE", running ? "Producing" : (downtime ? "Blocked" : "Idle"));
+            t.Write("BATCH_LINE_DOWNTIME", downtime);
+            t.Write("BATCH_LINE_STATE_REASON", reason);
+
             t.Write("BATCHES_TODAY", _batchesToday);
             t.Write("BATCHES_SHIFT", _batchesThisShift);
             t.Write("BATCH_LINE_GOOD_BATCHES_SHIFT", _goodBatchesThisShift);
             t.Write("BATCH_LINE_SCRAP_BATCHES_SHIFT", _scrapBatchesThisShift);
+            t.Write("BATCH_LINE_RUNTIME_MIN_SHIFT", Math.Round(_runtimeMinShift, 4));
+            t.Write("BATCH_LINE_DOWNTIME_MIN_SHIFT", Math.Round(_downtimeMinShift, 4));
         }
 
         /// <summary>

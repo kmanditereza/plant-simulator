@@ -78,6 +78,57 @@ namespace BatchPlant.Api
             app.MapPost("/api/packaging-order", HandlePackagingOrder);
             app.MapGet("/api/packaging/completed", HandleGetPackagingCompleted);
             app.MapPost("/api/packaging/completed/ack", HandleAckPackagingCompleted);
+            // Downtime events (queued, latched via DOWNTIME_EVENT_PENDING)
+            app.MapGet("/api/downtime/events", HandleGetDowntimeEvents);
+            app.MapPost("/api/downtime/events/ack", HandleAckDowntimeEvents);
+        }
+
+        // ================= Downtime events =================
+        // Downtime transitions are latched into a QUEUE rather than a single slot: a breakdown
+        // can start and end well within one poll interval, and both edges must survive. The
+        // bridge drains the queue and acks how many it published.
+        private readonly Queue<object> _downtimeEvents = new();
+
+        /// <summary>Called by DowntimeManager on each downtime edge. Sets the pending latch.</summary>
+        public void EnqueueDowntimeEvent(object evt)
+        {
+            lock (_eventLock)
+            {
+                _downtimeEvents.Enqueue(evt);
+                _tags?.Write("DOWNTIME_EVENT_PENDING", true);
+            }
+        }
+
+        private IResult HandleGetDowntimeEvents(HttpContext ctx)
+        {
+            lock (_eventLock)
+            {
+                var events = _downtimeEvents.ToArray();
+                return Results.Ok(new { pending = events.Length, events });
+            }
+        }
+
+        private IResult HandleAckDowntimeEvents(HttpContext ctx)
+        {
+            using var reader = new StreamReader(ctx.Request.Body);
+            var body = reader.ReadToEndAsync().Result;
+            int count = 0;
+            try { count = JsonNode.Parse(body)?["count"]?.GetValue<int>() ?? 0; } catch { }
+
+            int removed = 0;
+            int remaining;
+            lock (_eventLock)
+            {
+                while (removed < count && _downtimeEvents.Count > 0)
+                {
+                    _downtimeEvents.Dequeue();
+                    removed++;
+                }
+                remaining = _downtimeEvents.Count;
+                _tags?.Write("DOWNTIME_EVENT_PENDING", remaining > 0);
+            }
+            Console.WriteLine($"[API] Downtime events acked: {removed} (remaining {remaining})");
+            return Results.Ok(new { status = "acknowledged", removed, pending = remaining });
         }
 
         // ---- Helper: common event envelope fields ----

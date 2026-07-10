@@ -358,6 +358,16 @@ namespace BatchPlant.Process
             // PascalCase leak from Krones HMI configuration
             tags.Define("FILLER_HeadPress_01", BuiltInType.Double, fl, "bar", "Filler Head Pressure", 0.0);
             tags.Define("FL_501_PROD_TEMP", BuiltInType.Double, fl, "degC", "Product Temperature at Filler", 22.0);
+
+            // --- Fault + predictive-maintenance signals (condition monitoring escalates to a trip) ---
+            tags.Define("FL_501_FAULT", BuiltInType.Boolean, fl, description: "Filler Faulted (line down)");
+            tags.Define("FL_501_FAULT_CODE", BuiltInType.String, fl, description: "Active Fault Code (BREAKDOWN / HIGH-VIBRATION / HIGH-BEARING-TEMP)", initialValue: "");
+            tags.Define("FL_501_FAILCNT", BuiltInType.Int32, fl, description: "Filler Cumulative Fault Trips", initialValue: 0);
+            tags.Define("FL_501_VIB", BuiltInType.Double, fl, "mm/s", "Filler Vibration (RMS) - trips a fault at 3.2 mm/s", 0.0);
+            tags.Define("FL_501_BRGTEMP", BuiltInType.Double, fl, "degC", "Filler Bearing Temperature", 22.0);
+            tags.Define("FL_501_MCSA", BuiltInType.Double, fl, "%", "Filler Motor Current Signature Index", 0.0);
+            tags.Define("FL_501_SPEED_LOSS_PCT", BuiltInType.Double, fl, "%", "Wear-induced speed loss vs nameplate (drives OEE Performance below 100%)", 0.0);
+
             // PackML state (Krones standard)
             tags.Define("FL_501_OP_STATE", BuiltInType.Int32, fl, description: "PackML Operational State (0=Disabled,1=Idle,2=Running,3=Starved,4=Blocked,5=PlannedDT,6=UnplannedDT,7=Other)", initialValue: 1);
             tags.Define("FL_501_OP_STATE_TXT", BuiltInType.String, fl, description: "PackML Operational State Text", initialValue: "Idle");
@@ -678,6 +688,7 @@ namespace BatchPlant.Process
             tags.Define("WO_COMPLETED", BuiltInType.Boolean, p, description: "Work Order Completed flag - true when batch finishes, reset via POST /api/work-order/completed/ack", writable: true);
             tags.Define("BATCH_RELEASED", BuiltInType.Boolean, p, description: "Batch Released flag - true when batch is QA released, reset via POST /api/batch/released/ack", writable: true);
             tags.Define("PACK_ORDER_COMPLETED", BuiltInType.Boolean, p, description: "Packaging Run Completed flag - true when a packaging order finishes, reset via POST /api/packaging/completed/ack", writable: true);
+            tags.Define("DOWNTIME_EVENT_PENDING", BuiltInType.Boolean, p, description: "One or more downtime events are queued - GET /api/downtime/events then POST /api/downtime/events/ack", writable: true);
             tags.Define("BATCH_LINE_QUEUED", BuiltInType.Boolean, p, description: "Batch line holding new-batch starts because all buffer tanks are full", initialValue: false);
             tags.Define("BATCH_ID", BuiltInType.String, p, description: "Current Batch ID", initialValue: "");
             tags.Define("BATCH_STATUS", BuiltInType.String, p, description: "Batch Status", initialValue: "IDLE");
@@ -696,7 +707,16 @@ namespace BatchPlant.Process
 
             tags.Define("PLANT_MODE", BuiltInType.String, p, description: "Plant Mode (Production/CIP/Maintenance/Idle)", initialValue: "Idle");
             tags.Define("PLANT_RUNNING", BuiltInType.Boolean, p, description: "Plant Running (any line producing)");
-            tags.Define("SHIFT_ID", BuiltInType.String, p, description: "Current Shift (Day/Swing/Night)", initialValue: "Day");
+
+            // --- Shift window: numbered shifts, starting at 1 on simulator boot ---
+            tags.Define("SHIFT_ID", BuiltInType.String, p, description: "Current shift number (since simulator start or last reset)", initialValue: "1");
+            tags.Define("SHIFT_NUMBER", BuiltInType.Int32, p, description: "Current shift number - 1 on boot, +1 every SHIFT_DURATION_MIN", initialValue: 1);
+            tags.Define("SHIFT_DURATION_MIN", BuiltInType.Double, p, "min", "Shift length in real (wall-clock) minutes", 90.0);
+            tags.Define("SHIFT_ELAPSED_MIN", BuiltInType.Double, p, "min", "Elapsed real minutes within the current shift", 0.0);
+            tags.Define("SHIFT_RESET", BuiltInType.Boolean, p,
+                description: "Shift reset command. Normally true; write false to reset the shift counter back to shift 1 (the tag latches itself back to true).",
+                initialValue: true, writable: true);
+
             tags.Define("SHIFT_CHANGE_ACTIVE", BuiltInType.Boolean, p, description: "Shift Changeover Active");
             tags.Define("PLANT_TOTAL_PRODUCTION_TODAY", BuiltInType.Int32, p, "cases", "Total Cases Produced Today (all lines)", 0);
             tags.Define("SIM_SPEED", BuiltInType.Double, p, "x", "Simulation Speed Multiplier", 1.0);
@@ -716,6 +736,20 @@ namespace BatchPlant.Process
             tags.Define("BATCHES_SHIFT", BuiltInType.Int32, p, description: "Batches Completed This Shift", initialValue: 0);
             tags.Define("CURRENT_BATCH_ID", BuiltInType.String, p, description: "Currently Running Batch ID", initialValue: "");
 
+            // Order identity for the batch currently on the line (mirrors the pack line's
+            // PACK_ORD_WO / PACK_ORD_ID). Empty while the line is idle.
+            tags.Define("BATCH_LINE_WORK_ORDER_ID", BuiltInType.String, p, description: "Work Order Id driving the batch currently on the line ('' = idle)", initialValue: "");
+            tags.Define("BATCH_LINE_PROCESS_ORDER", BuiltInType.String, p, description: "Process Order number the current batch fulfils ('' = idle)", initialValue: "");
+
+            // Order quantities and the buffer this line feeds.
+            tags.Define("BATCH_LINE_ORDER_QTY_TARGET", BuiltInType.Double, p, "kg", "Target quantity of the work order on the line (0 = idle)", 0.0);
+            tags.Define("BATCH_LINE_ORDER_QTY_GOOD", BuiltInType.Double, p, "kg", "Good quantity completed for the order: product delivered into the buffer so far (0 = idle)", 0.0);
+            tags.Define("BATCH_LINE_UPSTREAM_BUFFER_LEVEL", BuiltInType.Double, p, "kg", "Product held across all three Area 450 buffer tanks (same units as batch size)", 0.0);
+
+            // Single downtime flag + the one reason explaining the line's current state.
+            tags.Define("BATCH_LINE_DOWNTIME", BuiltInType.Boolean, p, description: "Batch Line is down (stopped for a loss reason). Idle = nothing scheduled, not downtime.");
+            tags.Define("BATCH_LINE_STATE_REASON", BuiltInType.String, p, description: "Why the line is in its current state (Running / Blocked / Idle)", initialValue: "Idle");
+
             tags.Define("AVG_BATCH_CYCLE_MIN", BuiltInType.Double, p, "min", "Rolling Average Batch Cycle Time", 0.0);
             tags.Define("LAST_BATCH_CYCLE_MIN", BuiltInType.Double, p, "min", "Last Batch Cycle Time", 0.0);
 
@@ -724,8 +758,16 @@ namespace BatchPlant.Process
             tags.Define("BATCH_LINE_OEE_QUAL", BuiltInType.Double, p, "%", "Batch Line Quality (Cooks Within Spec)", 0.0);
             tags.Define("BATCH_LINE_OEE_OVERALL", BuiltInType.Double, p, "%", "Batch Line OEE Overall", 0.0);
 
-            tags.Define("BATCH_LINE_RUNTIME_MIN", BuiltInType.Double, p, "min", "Batch Line Runtime Today", 0.0);
-            tags.Define("BATCH_LINE_DOWNTIME_MIN", BuiltInType.Double, p, "min", "Batch Line Downtime Today", 0.0);
+            tags.Define("BATCH_LINE_RUNTIME_MIN_SHIFT", BuiltInType.Double, p, "min", "Batch Line Runtime This Shift, real minutes (a batch is in Area 200/300/400)", 0.0);
+            tags.Define("BATCH_LINE_DOWNTIME_MIN_SHIFT", BuiltInType.Double, p, "min", "Batch Line Downtime This Shift, real minutes (no batch in progress)", 0.0);
+
+            // Shift context, mirrored from PlantStatus so this folder is self-contained for
+            // line-scoped consumers (Ignition UDTs, OEE dashboards). Tag names are globally
+            // unique in the registry, hence the BATCH_LINE_ prefix.
+            tags.Define("BATCH_LINE_SHIFT_ID", BuiltInType.String, p, description: "Current shift number (mirror of PlantStatus/SHIFT_ID)", initialValue: "1");
+            tags.Define("BATCH_LINE_SHIFT_NUMBER", BuiltInType.Int32, p, description: "Current shift number (mirror of PlantStatus/SHIFT_NUMBER)", initialValue: 1);
+            tags.Define("BATCH_LINE_SHIFT_ELAPSED_MIN", BuiltInType.Double, p, "min", "Elapsed real minutes within the current shift", 0.0);
+            tags.Define("BATCH_LINE_SHIFT_DURATION_MIN", BuiltInType.Double, p, "min", "Shift length in real (wall-clock) minutes", 90.0);
             tags.Define("BATCH_LINE_CIP_TIME_MIN", BuiltInType.Double, p, "min", "Batch Line CIP Time Today", 0.0);
 
             // Active-phase view (batch-line scoped) and batch quality counts
@@ -779,6 +821,20 @@ namespace BatchPlant.Process
             tags.Define("PACK_ORD_PALLETS_DONE", BuiltInType.Int32, p, "pallets", "Pallets Produced for Active Packaging Order", 0);
             tags.Define("PACK_ORD_PROGRESS_PCT", BuiltInType.Double, p, "%", "Active Packaging Order Progress", 0.0);
 
+            // Order quantities and the buffer this line draws from.
+            tags.Define("PACK_LINE_ORDER_QTY_TARGET", BuiltInType.Double, p, "cases", "Target quantity of the packaging order on the line (0 = idle)", 0.0);
+            tags.Define("PACK_LINE_ORDER_QTY_GOOD", BuiltInType.Double, p, "cases", "Good cases completed for the order (excludes filler-rejected bottles)", 0.0);
+            tags.Define("PACK_LINE_DOWNSTREAM_BUFFER_LEVEL", BuiltInType.Double, p, "%", "Fullness across all three Area 450 buffer tanks", 0.0);
+
+            // Single downtime flag + the one reason explaining the line's current state.
+            tags.Define("PACK_LINE_DOWNTIME", BuiltInType.Boolean, p, description: "Pack Line is down (stopped for a loss reason). Idle/MicroStop are not downtime.");
+            tags.Define("PACK_LINE_STATE_REASON", BuiltInType.String, p, description: "Why the line is in its current state (Running / MicroStop / Idle / Starved / Blocked / MachineFault)", initialValue: "Idle");
+
+            // ETA support: remaining = ORDER_QTY_TARGET - ORDER_QTY_GOOD; ETA(min) = remaining / ORDER_QTY_RATE.
+            // Both are in PLANT (simulation) minutes, consistent with PACK_LINE_SPEED (BPM).
+            tags.Define("PACK_LINE_ORDER_RUNTIME_MIN", BuiltInType.Double, p, "min", "Plant minutes the current packaging order has actually been Running (0 = idle)", 0.0);
+            tags.Define("PACK_LINE_ORDER_QTY_RATE", BuiltInType.Double, p, "cases/min", "Average good cases per plant minute for the current order (ORDER_QTY_GOOD / ORDER_RUNTIME_MIN); 0 before the line runs", 0.0);
+
             // Production quality counts (line-level, aggregated from constituent machines)
             tags.Define("PACK_LINE_GOOD_UNITS_SHIFT", BuiltInType.Int32, p, "units", "Good Units Produced This Shift", 0);
             tags.Define("PACK_LINE_SCRAP_UNITS_SHIFT", BuiltInType.Int32, p, "units", "Scrap/Reject Units This Shift", 0);
@@ -792,8 +848,16 @@ namespace BatchPlant.Process
             tags.Define("PACK_LINE_OEE_QUAL", BuiltInType.Double, p, "%", "Packaging Line Quality (First Pass Yield)", 0.0);
             tags.Define("PACK_LINE_OEE_OVERALL", BuiltInType.Double, p, "%", "Packaging Line OEE Overall", 0.0);
 
-            tags.Define("PACK_LINE_RUNTIME_MIN", BuiltInType.Double, p, "min", "Packaging Line Runtime Today", 0.0);
-            tags.Define("PACK_LINE_DOWNTIME_MIN", BuiltInType.Double, p, "min", "Packaging Line Downtime Today", 0.0);
+            tags.Define("PACK_LINE_RUNTIME_MIN_SHIFT", BuiltInType.Double, p, "min", "Packaging Line Runtime This Shift, real minutes", 0.0);
+            tags.Define("PACK_LINE_DOWNTIME_MIN_SHIFT", BuiltInType.Double, p, "min", "Packaging Line Downtime This Shift, real minutes (order active but not running)", 0.0);
+
+            // Shift context, mirrored from PlantStatus so this folder is self-contained for
+            // line-scoped consumers (Ignition UDTs, OEE dashboards). Tag names are globally
+            // unique in the registry, hence the PACK_LINE_ prefix.
+            tags.Define("PACK_LINE_SHIFT_ID", BuiltInType.String, p, description: "Current shift number (mirror of PlantStatus/SHIFT_ID)", initialValue: "1");
+            tags.Define("PACK_LINE_SHIFT_NUMBER", BuiltInType.Int32, p, description: "Current shift number (mirror of PlantStatus/SHIFT_NUMBER)", initialValue: 1);
+            tags.Define("PACK_LINE_SHIFT_ELAPSED_MIN", BuiltInType.Double, p, "min", "Elapsed real minutes within the current shift", 0.0);
+            tags.Define("PACK_LINE_SHIFT_DURATION_MIN", BuiltInType.Double, p, "min", "Shift length in real (wall-clock) minutes", 90.0);
             tags.Define("PACK_LINE_MICROSTOPS_TODAY", BuiltInType.Int32, p, description: "Micro-stops Today (<5 min)", initialValue: 0);
             tags.Define("PACK_LINE_MAJOR_STOPS_TODAY", BuiltInType.Int32, p, description: "Major Stops Today (>5 min)", initialValue: 0);
         }

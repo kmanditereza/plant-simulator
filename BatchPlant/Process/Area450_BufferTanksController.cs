@@ -36,6 +36,19 @@ namespace BatchPlant.Process
         private const double TankFullThresholdL = 4500;  // tank becomes Ready at 90% full
         private const double TankEmptyThresholdL = 5;
 
+        /// <summary>Product density, matching the Vessel configuration below. Converts L -> kg.</summary>
+        public const double ProductDensityKgL = 1.08;
+
+        /// <summary>Combined capacity of BT-451/452/453.</summary>
+        public double TotalCapacityL => TankCapacityL * 3;
+
+        /// <summary>
+        /// Cumulative product (litres) delivered into the buffer per bulk batch. Monotonic for
+        /// the life of a batch, so it represents "good quantity completed" for that batch's
+        /// work order -- unlike the tank levels, which fall again as the pack line draws.
+        /// </summary>
+        private readonly Dictionary<string, double> _deliveredLByBatch = new();
+
         public Area450_BufferTanksController(PlantContext ctx)
         {
             _ctx = ctx;
@@ -68,18 +81,51 @@ namespace BatchPlant.Process
             if (already != null && (already.BatchId == batchId || string.IsNullOrEmpty(already.BatchId)))
             {
                 double accepted = already.ExternalFill(volumeL, tempC, batchId);
-                if (accepted > 0) return accepted;
+                if (accepted > 0) return RecordDelivery(batchId, accepted);
             }
 
             // Otherwise pick an empty tank and dedicate it to this batch.
             var empty = FindEmptyTank();
             if (empty != null)
             {
-                return empty.ExternalFill(volumeL, tempC, batchId);
+                return RecordDelivery(batchId, empty.ExternalFill(volumeL, tempC, batchId));
             }
 
             return 0; // all tanks full or draining
         }
+
+        /// <summary>Accumulate what this batch has delivered into the buffer, and pass the volume through.</summary>
+        private double RecordDelivery(string batchId, double acceptedL)
+        {
+            if (acceptedL > 0 && !string.IsNullOrEmpty(batchId))
+            {
+                _deliveredLByBatch.TryGetValue(batchId, out var sofar);
+                _deliveredLByBatch[batchId] = sofar + acceptedL;
+            }
+            return acceptedL;
+        }
+
+        /// <summary>Good product (kg) this batch has delivered into the buffer so far.</summary>
+        public double DeliveredKgFor(string batchId)
+        {
+            if (string.IsNullOrEmpty(batchId)) return 0;
+            return _deliveredLByBatch.TryGetValue(batchId, out var l) ? l * ProductDensityKgL : 0;
+        }
+
+        /// <summary>Total product held across all three tanks, regardless of state or temperature.</summary>
+        public double TotalProductL()
+        {
+            double total = 0;
+            foreach (var tank in new[] { _bt451, _bt452, _bt453 })
+                total += tank.VesselLevel;
+            return total;
+        }
+
+        /// <summary>Total product held across all three tanks, in kg (same units as batch size).</summary>
+        public double TotalProductKg() => TotalProductL() * ProductDensityKgL;
+
+        /// <summary>Buffer fullness across all three tanks, as a percentage of combined capacity.</summary>
+        public double BufferFullnessPct() => TotalCapacityL > 0 ? TotalProductL() / TotalCapacityL * 100.0 : 0;
 
         /// <summary>
         /// True while at least one tank is Empty and can accept a new batch. The batch

@@ -63,7 +63,7 @@ namespace BatchPlant.Core
             _running = true;
 
             Console.WriteLine($"[ENGINE] Starting simulation engine ({_components.Count} components, speed {_clock.SpeedMultiplier}x)");
-            Console.WriteLine($"[ENGINE] Sim start time: {_clock.Now:yyyy-MM-dd HH:mm:ss} ({_clock.CurrentShift})");
+            Console.WriteLine($"[ENGINE] Sim start time: {_clock.Now:yyyy-MM-dd HH:mm:ss} ({_clock.ShiftLabel})");
 
             _tickTimer = new Timer(OnTick, null, 0, TickIntervalMs);
         }

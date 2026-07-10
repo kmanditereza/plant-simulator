@@ -78,6 +78,20 @@ namespace BatchPlant.Equipment
         }
 
         /// <summary>
+        /// Maintenance: reset accumulated wear/oil/filter hours so the degradation signals return
+        /// to their as-new baseline. Called after a condition-based fault is repaired (bearing
+        /// replaced, filter changed). FailureCount is cumulative and deliberately not reset.
+        /// </summary>
+        public void Service()
+        {
+            _wearHrs = 0;
+            _oilHrs = 0;
+            _filterHrs = 0;
+            FilterDp = FilterDpClean;
+            OilQuality = 100.0;
+        }
+
+        /// <summary>
         /// Advance the model one tick.
         /// </summary>
         /// <param name="running">Whether the asset is running this tick.</param>

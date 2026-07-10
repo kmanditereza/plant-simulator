@@ -30,7 +30,10 @@ namespace BatchPlant.Process
 
         // --- Active packaging order (gates the line) ---
         private PackagingInstruction? _order;
-        private int _orderBottlesProduced;
+        private int _orderBottlesProduced;   // all bottles filled (good + rejected)
+        private int _orderGoodBottles;       // good bottles only -- drives ORDER_QTY_GOOD
+        private long _lastGoodCount;         // Filler.GoodCount at the previous tick, for the delta
+        private double _orderRuntimeMin;     // plant (sim) minutes this order has actually been Running
         private DateTime? _orderStarted;
         // Material genealogy: bottles produced per bulk batch drawn from the buffer.
         private readonly Dictionary<string, double> _bottlesByBatch = new();
@@ -45,6 +48,21 @@ namespace BatchPlant.Process
         private const double BottleWeightG = 397.0;
         private const double ProductDensityKgL = 1.08;
         private const double InversionTunnelSec = 10.0;
+
+        // --- Micro-stops: brief stalls (jam clearance, bottle fall) that occur INSIDE run time.
+        // The line stays Running, so the lost output shows up as an OEE Performance loss, not
+        // Availability. Breakdowns are the opposite: they stop the line and hit Availability.
+        private const double MicroStopMtbfRunHours = 0.1;   // ~1 micro-stop per 6 plant-min of running
+        private const double MicroStopMinSec = 10.0;        // plant seconds
+        private const double MicroStopMaxSec = 40.0;
+
+        // --- Starvation hysteresis (Schmitt trigger) ---
+        // A single threshold makes the line chatter Running<->Starved when hot product hovers at
+        // the limit, which in turn produces a storm of downtime events. Require a healthy amount
+        // of product to (re)start, but only declare starvation once it has genuinely run out.
+        private const double StarveResumeL = 150.0;   // need this much hot product to start filling
+        private const double StarveTripL = 20.0;      // starve only once it falls below this
+        private bool _productAvailable;
 
         // --- Line state ---
         private OperationalState _lineState = OperationalState.Idle;
@@ -76,13 +94,22 @@ namespace BatchPlant.Process
         private readonly ConditionMonitor _cmCapper;
         private readonly ConditionMonitor _cmConveyor;
 
+        // Stoppages
+        private bool _microStopActive;          // true on the ticks a micro-stop is stalling output
+        private double _microStopSecRemaining;   // plant seconds left in the current micro-stop
+        private int _microStopsToday;
+        private int _majorStopsToday;
+        private bool _prevFaulted;
+        private DateTime _counterDate;
+
         // Shift-local and daily counters for PackLine aggregations
         private int _bottlesTodayCounter;
         private int _bottlesThisShift;
-        private ShiftType _lastShift;
+        private int _lastShift;
         private bool _shiftInit;
-        private double _runtimeMinToday;
-        private double _downtimeMinToday;
+        private double _runtimeMinShift;        // wall minutes -- shift KPI tags (90-min shift window)
+        private double _downtimeMinShift;       // wall minutes
+        private double _runtimePlantMinShift;   // plant minutes -- OEE performance denominator
 
         private bool _initialized;
 
@@ -107,7 +134,22 @@ namespace BatchPlant.Process
                 UnderweightLimit = 388,
                 OverweightLimit = 406,
                 MinFillTemp = 82.0,
-                FillRate = TargetBpm
+                FillRate = TargetBpm,
+
+                // Random breakdowns (Availability loss). Scaled to how little the line actually
+                // runs: a packaging order is only ~20-40 plant-minutes of run time, so an MTBF of
+                // 0.5 run-hours gives roughly one breakdown per order.
+                MtbfRunHours = 0.5,
+                MttrMinutesMin = 3.0,
+                MttrMinutesMax = 10.0,
+
+                // Wear-driven speed loss (Performance loss): actual cycle time drifts from ideal.
+                // Accumulates across orders and only resets when the asset is serviced.
+                SpeedLossPctPerRunHour = 5.0,
+                MaxSpeedLossPct = 15.0,
+
+                // Condition-based trip: vibration climbs with wear until it forces a stoppage.
+                VibrationTripLimit = 3.2
             }.Bind(new PistonFillerTagMap
             {
                 CurrentWeight = "FL_501_WEIGHT",
@@ -118,8 +160,19 @@ namespace BatchPlant.Process
                 WeightAvg = "FL_501_WT_AVG",
                 WeightStdDev = "FL_501_WT_STDDEV",
                 Yield = "FL_501_YIELD",
-                Status = "FL_501_STATUS"
+                Status = "FL_501_STATUS",
+                Fault = "FL_501_FAULT",
+                FaultCode = "FL_501_FAULT_CODE",
+                FailureCount = "FL_501_FAILCNT",
+                Vibration = "FL_501_VIB",
+                BearingTemp = "FL_501_BRGTEMP",
+                Mcsa = "FL_501_MCSA",
+                SpeedLossPct = "FL_501_SPEED_LOSS_PCT"
             });
+
+            // Wear reaches the 3.2 mm/s vibration trip after ~0.7 run-hours, i.e. within a long
+            // packaging order. Vibration = BaseVibration * load * (1 + runHrs/WearHours).
+            Filler.Condition.WearHours = 0.6;
         }
 
         public void Tick(TimeSpan dt, DateTime simNow)
@@ -129,19 +182,38 @@ namespace BatchPlant.Process
                 _stateEntered = simNow;
                 _modeEntered = simNow;
                 _lineStarted = simNow;
-                // Start the filler so it can produce when commanded
-                Filler.Start();
                 _initialized = true;
             }
 
-            // Reset the per-shift bottle counter at each shift change.
-            ShiftType shift = _ctx.Clock.CurrentShift;
+            // Reset the daily counters on sim-date rollover.
+            if (simNow.Date != _counterDate.Date)
+            {
+                _counterDate = simNow.Date;
+                _bottlesTodayCounter = 0;
+                _microStopsToday = 0;
+                _majorStopsToday = 0;
+            }
+
+            // Reset the per-shift counters at each shift change (incl. a SHIFT_RESET).
+            int shift = _ctx.Clock.CurrentShift;
             if (!_shiftInit || shift != _lastShift)
             {
                 _shiftInit = true;
                 _lastShift = shift;
                 _bottlesThisShift = 0;
+                _runtimeMinShift = 0;
+                _downtimeMinShift = 0;
+                _runtimePlantMinShift = 0;
             }
+
+            // Count breakdowns on the rising edge, and restart the filler once its repair completes
+            // (ClearFault leaves equipment Off, so without this a single fault would kill the line).
+            if (Filler.IsFaulted && !_prevFaulted)
+            {
+                _majorStopsToday++;
+                Console.WriteLine($"[{simNow:HH:mm:ss}] Area 500: FL-501 FAULT '{Filler.FaultCode}' - line down");
+            }
+            _prevFaulted = Filler.IsFaulted;
 
             // 0. Gate on a packaging order. The pack line no longer runs continuously —
             //    it draws a dequeued packaging order to completion, then idles.
@@ -154,15 +226,23 @@ namespace BatchPlant.Process
                     _order.StartedAt = simNow;
                     _orderStarted = simNow;
                     _orderBottlesProduced = 0;
+                    _orderGoodBottles = 0;
+                    _orderRuntimeMin = 0;
+                    _lastGoodCount = Filler.GoodCount;   // baseline: only count good bottles from here on
                     _bottlesByBatch.Clear();
                     Console.WriteLine($"[{simNow:HH:mm:ss}] Area 500: Starting packaging order {_order.PackagingOrderNumber} " +
                                       $"({_order.TargetCases} cases x {_order.BottlesPerCase} of {_order.Sku})");
                 }
             }
 
-            // 1. Determine what the line SHOULD be doing based on conditions
+            // 1. Determine what the line SHOULD be doing based on conditions.
+            // Hysteresis: once running, keep going until the buffer is genuinely empty; once
+            // starved, wait for a real refill rather than restarting on a few stray litres.
             double hotProductAvailableL = _buffers.TotalHotProductL();
-            bool productAvailable = hotProductAvailableL > 50; // need minimum supply
+            _productAvailable = _productAvailable
+                ? hotProductAvailableL > StarveTripL
+                : hotProductAvailableL >= StarveResumeL;
+            bool productAvailable = _productAvailable;
 
             OperationalState desiredState;
             if (_order == null)
@@ -195,47 +275,98 @@ namespace BatchPlant.Process
                 _stateEntered = simNow;
             }
 
+            // Keep the filler's equipment state in step with the line. It must only be Running while
+            // the line actually produces, otherwise it accrues run hours, wear and failure hazard
+            // while idle or starved -- and would break down without ever having made a bottle.
+            // (A micro-stop deliberately leaves the filler Running: the stall is inside run time.)
+            if (!Filler.IsFaulted)
+            {
+                bool producing = _lineState == OperationalState.Running;
+                if (producing && (Filler.State == EquipmentState.Off || Filler.State == EquipmentState.Stopping))
+                {
+                    Filler.Start();
+                }
+                else if (!producing && (Filler.State == EquipmentState.Running || Filler.State == EquipmentState.Starting))
+                {
+                    Filler.Stop();
+                }
+            }
+
             // 2. If Running, produce bottles
             BottlesProducedThisTick = 0;
-            double dtMin = dt.TotalMinutes;
+            double dtMin = dt.TotalMinutes;                                  // sim minutes: drives process physics
+            double dtWallMin = _ctx.Clock.SimToWall(dt).TotalMinutes;        // real minutes: drives the shift-scoped counters
 
             if (_lineState == OperationalState.Running)
             {
-                // Draw product from ONE buffer tank (one bulk batch at a time) and record
-                // which batch it came from for the packaging order's material genealogy.
-                double consumptionLpm = TargetBpm * BottleWeightG / ProductDensityKgL / 1000.0;
-                double drawVolume = consumptionLpm * dtMin;
-                var (_, drawnBatchId) = _buffers.DrawFromOneBatch(drawVolume);
-
-                // Update product temperature from buffer average (accounting for slight cooling during transfer)
-                _productTempC = Math.Max(82, _buffers.AverageProductTempC() - 1.5);
-                Filler.ProductTemp = _productTempC;
-
-                // Fill bottles via the PistonFiller equipment class
-                int filled = Filler.FillBottles(dt);
-                BottlesProducedThisTick = filled;
-                _capsApplied += filled;
-                _bottlesTodayCounter += filled;
-                _bottlesThisShift += filled;
-
-                // Packaging-order counters + genealogy attribution
-                _orderBottlesProduced += filled;
-                if (filled > 0 && !string.IsNullOrEmpty(drawnBatchId))
+                // Micro-stop: a brief stall inside run time. The line stays Running, so run time
+                // keeps accruing while output does not -- which is exactly how a micro-stop shows
+                // up as an OEE Performance loss rather than an Availability loss.
+                if (_microStopSecRemaining > 0)
                 {
-                    _bottlesByBatch.TryGetValue(drawnBatchId, out var cur);
-                    _bottlesByBatch[drawnBatchId] = cur + filled;
+                    _microStopSecRemaining -= dt.TotalSeconds;
+                }
+                else if (_ctx.Rng.NextDouble() < dt.TotalHours / MicroStopMtbfRunHours)
+                {
+                    _microStopSecRemaining = MicroStopMinSec + _ctx.Rng.NextDouble() * (MicroStopMaxSec - MicroStopMinSec);
+                    _microStopsToday++;
+                    Console.WriteLine($"[{simNow:HH:mm:ss}] Area 500: micro-stop ({_microStopSecRemaining:F0}s)");
+                }
+                bool stalled = _microStopSecRemaining > 0;
+                _microStopActive = stalled;
+
+                if (!stalled)
+                {
+                    // Draw product from ONE buffer tank (one bulk batch at a time) and record
+                    // which batch it came from for the packaging order's material genealogy.
+                    double consumptionLpm = TargetBpm * BottleWeightG / ProductDensityKgL / 1000.0;
+                    double drawVolume = consumptionLpm * dtMin;
+                    var (_, drawnBatchId) = _buffers.DrawFromOneBatch(drawVolume);
+
+                    // Update product temperature from buffer average (accounting for slight cooling during transfer)
+                    _productTempC = Math.Max(82, _buffers.AverageProductTempC() - 1.5);
+                    Filler.ProductTemp = _productTempC;
+
+                    // Fill bottles via the PistonFiller equipment class
+                    int filled = Filler.FillBottles(dt);
+                    BottlesProducedThisTick = filled;
+                    _capsApplied += filled;
+                    _bottlesTodayCounter += filled;
+                    _bottlesThisShift += filled;
+
+                    // Packaging-order counters + genealogy attribution.
+                    // Filler.FillBottles() returns ALL bottles filled (good + rejected), so the good
+                    // count is taken from the filler's own good tally as a per-tick delta.
+                    long goodNow = Filler.GoodCount;
+                    _orderGoodBottles += (int)Math.Max(0, goodNow - _lastGoodCount);
+                    _lastGoodCount = goodNow;
+
+                    _orderBottlesProduced += filled;
+                    if (filled > 0 && !string.IsNullOrEmpty(drawnBatchId))
+                    {
+                        _bottlesByBatch.TryGetValue(drawnBatchId, out var cur);
+                        _bottlesByBatch[drawnBatchId] = cur + filled;
+                    }
+
+                    _lineSpeed = Filler.ActualRate;
+                }
+                else
+                {
+                    _lineSpeed = 0;   // stalled: no output, but still inside run time
                 }
 
-                _lineSpeed = Filler.ActualRate;
-                _runtimeMinToday += dtMin;
+                _runtimeMinShift += dtWallMin;      // shift KPIs are wall-clock (90-min shift window)
+                _runtimePlantMinShift += dtMin;     // OEE performance: must match TargetBpm's plant-time base
+                _orderRuntimeMin += dtMin;          // order ETA is plant time, matching PACK_LINE_SPEED (BPM)
 
-                CheckOrderCompletion(simNow);
+                if (!stalled) CheckOrderCompletion(simNow);
             }
             else
             {
                 _lineSpeed = 0;
+                _microStopActive = false;
                 // Only count downtime while an order is active (idle-with-no-order is not a loss).
-                if (_order != null) _downtimeMinToday += dtMin;
+                if (_order != null) _downtimeMinShift += dtWallMin;
             }
 
             // 3. Update tunnel temperature profiles
@@ -314,13 +445,23 @@ namespace BatchPlant.Process
             t.Write("PACK_LINE_BOTTLENECK", bottleneck);
             t.Write("PACK_LINE_SPEED", Math.Round(_lineSpeed, 1));
             t.Write("PACK_LINE_TARGET_SPEED", TargetBpm);
-            t.Write("PACK_LINE_RUNTIME_MIN", Math.Round(_runtimeMinToday, 2));
-            t.Write("PACK_LINE_DOWNTIME_MIN", Math.Round(_downtimeMinToday, 2));
+            t.Write("PACK_LINE_RUNTIME_MIN_SHIFT", Math.Round(_runtimeMinShift, 4));
+            t.Write("PACK_LINE_DOWNTIME_MIN_SHIFT", Math.Round(_downtimeMinShift, 4));
 
-            // OEE calculation (simplified)
-            double plannedMin = _runtimeMinToday + _downtimeMinToday;
-            double availability = plannedMin > 0 ? _runtimeMinToday / plannedMin * 100.0 : 100.0;
-            double performance = _runtimeMinToday > 0 ? (_bottlesTodayCounter / (_runtimeMinToday * TargetBpm)) * 100.0 : 100.0;
+            // OEE calculation (simplified). Availability and performance are scoped to the
+            // current shift, so the bottle count in the performance ratio must be the
+            // per-shift one -- pairing lifetime bottles with shift runtime would inflate it.
+            //
+            // Availability is a wall/wall ratio, so it uses the wall-clock counters.
+            // Performance = actual output / theoretical output during run time. Bottles accrue
+            // in PLANT time (TargetBpm is bottles per plant-minute), so the denominator must be
+            // plant minutes too. Using the wall-clock runtime here would inflate the ratio by
+            // SIM_SPEED (60x) and the Math.Min clamp would peg performance at 100% forever,
+            // hiding every speed loss.
+            double plannedMin = _runtimeMinShift + _downtimeMinShift;
+            double availability = plannedMin > 0 ? _runtimeMinShift / plannedMin * 100.0 : 100.0;
+            double performance = _runtimePlantMinShift > 0
+                ? (_bottlesThisShift / (_runtimePlantMinShift * TargetBpm)) * 100.0 : 100.0;
             performance = Math.Min(100.0, performance);
             double quality = Filler.TotalCount > 0 ? Filler.FirstPassYield : 100.0;
             double oeeOverall = (availability / 100.0) * (performance / 100.0) * (quality / 100.0) * 100.0;
@@ -331,6 +472,27 @@ namespace BatchPlant.Process
             t.Write("PACK_LINE_OEE_OVERALL", Math.Round(oeeOverall, 1));
             t.Write("BOTTLES_TODAY", _bottlesTodayCounter);
             t.Write("BOTTLES_SHIFT", _bottlesThisShift);
+
+            // Stoppage counts: micro-stops sit inside run time (Performance loss); major stops are
+            // breakdowns that take the line down (Availability loss).
+            t.Write("PACK_LINE_MICROSTOPS_TODAY", _microStopsToday);
+            t.Write("PACK_LINE_MAJOR_STOPS_TODAY", _majorStopsToday);
+
+            // Single downtime flag + the one reason that explains the line's current state.
+            // Precedence mirrors the state machine, so exactly one reason is reported at a time.
+            // Idle (no order) is NOT downtime: nothing was scheduled, so nothing was lost.
+            // A micro-stop is NOT downtime either: it sits inside run time and shows up in Performance.
+            string reason;
+            bool downtime;
+            if (_order == null)                                     { reason = "Idle";         downtime = false; }
+            else if (Filler.IsFaulted)                              { reason = "MachineFault"; downtime = true; }
+            else if (_lineState == OperationalState.Starved)        { reason = "Starved";      downtime = true; }
+            else if (_lineState == OperationalState.Blocked)        { reason = "Blocked";      downtime = true; }
+            else if (_microStopActive)                              { reason = "MicroStop";    downtime = false; }
+            else                                                    { reason = "Running";      downtime = false; }
+
+            t.Write("PACK_LINE_DOWNTIME", downtime);
+            t.Write("PACK_LINE_STATE_REASON", reason);
 
             // Active packaging order progress (cases as the ordering unit; bottles + pallets reported too)
             int casesDone = _order != null && _order.BottlesPerCase > 0 ? _orderBottlesProduced / _order.BottlesPerCase : 0;
@@ -346,6 +508,28 @@ namespace BatchPlant.Process
             t.Write("PACK_ORD_PROGRESS_PCT", _order != null && _order.TargetCases > 0
                 ? Math.Round(Math.Min(100.0, casesDone / _order.TargetCases * 100.0), 1) : 0.0);
             t.Write("PACK_LINE_CURRENT_SKU", _order?.Sku ?? "");
+
+            // Order quantities, in cases. GOOD excludes bottles the filler rejected
+            // (underweight/overweight/cold), unlike PACK_ORD_CASES_DONE.
+            int goodCases = _order != null && _order.BottlesPerCase > 0 ? _orderGoodBottles / _order.BottlesPerCase : 0;
+            t.Write("PACK_LINE_ORDER_QTY_TARGET", _order != null ? _order.TargetCases : 0.0);
+            t.Write("PACK_LINE_ORDER_QTY_GOOD", (double)goodCases);
+
+            // ETA support: rate = good cases per PLANT minute, averaged over the time this order
+            // has actually been Running. Averaged (not instantaneous) so a Starved/Blocked blip
+            // doesn't send the rate -- and therefore the ETA -- to zero/infinity.
+            // Uses fractional cases so the rate doesn't quantise in steps of one case.
+            //   ETA_plant_minutes = (ORDER_QTY_TARGET - ORDER_QTY_GOOD) / ORDER_QTY_RATE
+            double goodCasesExact = _order != null && _order.BottlesPerCase > 0
+                ? _orderGoodBottles / (double)_order.BottlesPerCase : 0.0;
+            double orderRate = (_order != null && _orderRuntimeMin > 0)
+                ? goodCasesExact / _orderRuntimeMin : 0.0;
+
+            t.Write("PACK_LINE_ORDER_RUNTIME_MIN", _order != null ? Math.Round(_orderRuntimeMin, 2) : 0.0);
+            t.Write("PACK_LINE_ORDER_QTY_RATE", Math.Round(orderRate, 3));
+
+            // Buffer the pack line draws from (Area 450, all three tanks), as % fullness.
+            t.Write("PACK_LINE_DOWNSTREAM_BUFFER_LEVEL", Math.Round(_buffers.BufferFullnessPct(), 1));
 
             // Cycle time (seconds per unit) derived from current line speed.
             // Line-global (whole line runs synchronized at this speed); good/scrap
@@ -421,6 +605,8 @@ namespace BatchPlant.Process
             _packagingQueue?.MarkComplete(simNow);
             _order = null;
             _orderBottlesProduced = 0;
+            _orderGoodBottles = 0;
+            _orderRuntimeMin = 0;
             _bottlesByBatch.Clear();
             _orderStarted = null;
         }

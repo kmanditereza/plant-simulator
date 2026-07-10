@@ -16,6 +16,13 @@ namespace BatchPlant.Equipment
         public string? WeightStdDev { get; set; }
         public string? Yield { get; set; }
         public string? Status { get; set; }
+        public string? Fault { get; set; }
+        public string? FaultCode { get; set; }
+        public string? FailureCount { get; set; }
+        public string? Vibration { get; set; }
+        public string? BearingTemp { get; set; }
+        public string? Mcsa { get; set; }
+        public string? SpeedLossPct { get; set; }
     }
 
     /// <summary>
@@ -44,7 +51,30 @@ namespace BatchPlant.Equipment
         public double OverweightLimit { get; set; } = 406;
         public double MinFillTemp { get; set; } = 82.0;
 
+        /// <summary>
+        /// Speed loss from mechanical wear: percent of nameplate rate lost per RUN hour since the
+        /// last service. This is what makes actual cycle time drift away from ideal, so OEE
+        /// Performance can fall below 100%. 0 = no speed degradation.
+        /// </summary>
+        public double SpeedLossPctPerRunHour { get; set; }
+
+        /// <summary>Ceiling on the wear-induced speed loss, percent.</summary>
+        public double MaxSpeedLossPct { get; set; } = 15.0;
+
+        /// <summary>Current speed loss (%), growing with RunHoursSinceService, reset by servicing.</summary>
+        public double SpeedLossPct =>
+            Math.Min(MaxSpeedLossPct, SpeedLossPctPerRunHour * RunHoursSinceService);
+
+        /// <summary>Nameplate rate reduced by the current wear-induced speed loss.</summary>
+        public double EffectiveFillRate => FillRate * (1.0 - SpeedLossPct / 100.0);
+
         public double ProductTemp { get; set; } = 85.0;
+
+        /// <summary>Report the filler's true mechanical load so vibration tracks actual speed.</summary>
+        protected override double ConditionLoad =>
+            State == EquipmentState.Running
+                ? Math.Clamp(ActualRate / Math.Max(1.0, FillRate), 0.0, 1.5)
+                : 0.0;
 
         private double _fillAccumulator;
         private readonly List<double> _recentWeights = new();
@@ -73,7 +103,10 @@ namespace BatchPlant.Equipment
 
             double currentStdDev = BaseStdDev + (RunHoursSinceService / 100.0) * WearDegradation;
 
-            ActualRate = Ctx.AddNoise(FillRate, FillRate * 0.005);
+            // Wear slows the filler: the achievable rate drifts below nameplate, which shows up as
+            // a longer actual cycle time and drags OEE Performance below 100%.
+            double rate = EffectiveFillRate;
+            ActualRate = Ctx.AddNoise(rate, rate * 0.005);
             _fillAccumulator += ActualRate * dt.TotalMinutes;
 
             int filled = 0;
@@ -148,6 +181,15 @@ namespace BatchPlant.Equipment
             if (_tags.WeightStdDev != null) Ctx.Tags.Write(_tags.WeightStdDev, Math.Round(WeightStdDev, 2));
             if (_tags.Yield != null) Ctx.Tags.Write(_tags.Yield, Math.Round(FirstPassYield, 1));
             if (_tags.Status != null) Ctx.Tags.Write(_tags.Status, status);
+
+            // Fault + predictive-maintenance signals (previously computed but never published).
+            if (_tags.Fault != null) Ctx.Tags.Write(_tags.Fault, IsFaulted);
+            if (_tags.FaultCode != null) Ctx.Tags.Write(_tags.FaultCode, FaultCode);
+            if (_tags.FailureCount != null) Ctx.Tags.Write(_tags.FailureCount, FailureCount);
+            if (_tags.Vibration != null) Ctx.Tags.Write(_tags.Vibration, Math.Round(Condition.Vibration, 3));
+            if (_tags.BearingTemp != null) Ctx.Tags.Write(_tags.BearingTemp, Math.Round(Condition.BearingTemp, 1));
+            if (_tags.Mcsa != null) Ctx.Tags.Write(_tags.Mcsa, Math.Round(Condition.McsaIndex, 1));
+            if (_tags.SpeedLossPct != null) Ctx.Tags.Write(_tags.SpeedLossPct, Math.Round(SpeedLossPct, 2));
         }
     }
 }

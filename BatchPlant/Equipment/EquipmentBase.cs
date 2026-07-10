@@ -36,6 +36,25 @@ namespace BatchPlant.Equipment
         private TimeSpan _shutdownDelay = TimeSpan.FromSeconds(2);
         private DateTime? _transitionStart;
         private DateTime? _faultRepairTime;
+        private bool _faultFromCondition;
+
+        // ---- Failure model. All disabled by default: equipment that doesn't opt in never fails. ----
+
+        /// <summary>Mean RUN hours between random breakdowns (plant time). 0 = never fails randomly.</summary>
+        public double MtbfRunHours { get; set; }
+
+        /// <summary>Repair time (plant minutes) drawn uniformly from this range when a fault trips.</summary>
+        public double MttrMinutesMin { get; set; } = 5;
+        public double MttrMinutesMax { get; set; } = 20;
+
+        /// <summary>Vibration (mm/s RMS) at which condition monitoring trips a fault. 0 = disabled.</summary>
+        public double VibrationTripLimit { get; set; }
+
+        /// <summary>Bearing temperature (degC) at which condition monitoring trips a fault. 0 = disabled.</summary>
+        public double BearingTempTripLimit { get; set; }
+
+        /// <summary>True while the equipment is stopped by a fault raised from a condition limit.</summary>
+        public bool FaultedFromCondition => IsFaulted && _faultFromCondition;
 
         public virtual int Priority => 30; // Equipment layer
 
@@ -116,8 +135,22 @@ namespace BatchPlant.Equipment
                 State = EquipmentState.Off;
                 FaultCode = "";
                 _faultRepairTime = null;
+
+                // A condition-based trip is repaired by maintenance (bearing/seal replaced), so the
+                // wear that caused it is reset -- degradation signals and speed loss start over.
+                // A random breakdown (jam) is just cleared; accumulated wear survives it.
+                if (_faultFromCondition)
+                {
+                    ResetServiceHours();
+                    Condition.Service();
+                    _faultFromCondition = false;
+                }
             }
         }
+
+        /// <summary>Repair duration drawn from [MttrMinutesMin, MttrMinutesMax], in plant minutes.</summary>
+        protected TimeSpan RandomMttr() =>
+            TimeSpan.FromMinutes(MttrMinutesMin + Ctx.Rng.NextDouble() * Math.Max(0, MttrMinutesMax - MttrMinutesMin));
 
         public virtual void Tick(TimeSpan dt, DateTime simNow)
         {
@@ -144,6 +177,14 @@ namespace BatchPlant.Equipment
                     double hours = dt.TotalHours;
                     RunHours += hours;
                     RunHoursSinceService += hours;
+
+                    // Random breakdown: constant-hazard (Poisson) process over RUN hours, so
+                    // equipment only ages toward failure while it is actually running.
+                    if (MtbfRunHours > 0 && Ctx.Rng.NextDouble() < hours / MtbfRunHours)
+                    {
+                        _faultFromCondition = false;
+                        Fault("BREAKDOWN", RandomMttr());
+                    }
                     break;
 
                 case EquipmentState.Faulted:
@@ -168,8 +209,32 @@ namespace BatchPlant.Equipment
             // Advance condition-monitoring signals before publishing tags.
             Condition.Update(State == EquipmentState.Running, ConditionLoad, IsFaulted, dt.TotalSeconds);
 
+            // Condition-based trip: degradation escalates into an actual stoppage, which is what
+            // ties the predictive-maintenance signals to a consequence. Evaluated after the update
+            // so we trip on this tick's values.
+            if (State == EquipmentState.Running)
+            {
+                if (VibrationTripLimit > 0 && Condition.Vibration >= VibrationTripLimit)
+                {
+                    TripFromCondition("HIGH-VIBRATION");
+                }
+                else if (BearingTempTripLimit > 0 && Condition.BearingTemp >= BearingTempTripLimit)
+                {
+                    TripFromCondition("HIGH-BEARING-TEMP");
+                }
+            }
+
             // Write common tags
             WriteTags();
+        }
+
+        /// <summary>Trip a fault caused by a condition-monitoring limit; repair will service the asset.</summary>
+        private void TripFromCondition(string code)
+        {
+            _faultFromCondition = true;
+            Fault(code, RandomMttr());
+            Console.WriteLine($"[{Ctx.Clock.Now:HH:mm:ss}] [{TagPrefix}] Condition trip: {code} " +
+                              $"(vib={Condition.Vibration:F2} mm/s, brg={Condition.BearingTemp:F1} C)");
         }
 
         /// <summary>Update physics while running. Override in subclasses.</summary>

@@ -51,7 +51,7 @@ namespace BatchPlant.Process
 
         // Per-shift good/scrap tracking: baselines captured at each shift change so the
         // published counts reflect only the current shift's production.
-        private ShiftType _lastShift;
+        private int _lastShift;
         private bool _shiftInit;
         private long _shiftGoodBaseline;
         private long _shiftScrapBaseline;
@@ -223,7 +223,7 @@ namespace BatchPlant.Process
             long lineGood = Math.Max(0, fillerGood - downstreamReject);
 
             // Rebase good/scrap at each shift change so the published counts are per-shift.
-            ShiftType shift = _ctx.Clock.CurrentShift;
+            int shift = _ctx.Clock.CurrentShift;
             if (!_shiftInit || shift != _lastShift)
             {
                 _shiftInit = true;

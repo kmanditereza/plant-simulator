@@ -37,15 +37,23 @@ namespace BatchPlant
                     simStart = parsedStart;
                 }
 
+                // Shift length in REAL (wall-clock) minutes (default 90), independent of SIM_SPEED.
+                double shiftMinutes = 90.0;
+                var shiftEnv = Environment.GetEnvironmentVariable("SHIFT_MINUTES");
+                if (!string.IsNullOrEmpty(shiftEnv) && double.TryParse(shiftEnv, out var parsedShift) && parsedShift > 0)
+                {
+                    shiftMinutes = parsedShift;
+                }
+
                 // 1. Create core infrastructure
-                var clock = new SimClock(simStart, simSpeed);
+                var clock = new SimClock(simStart, simSpeed, shiftMinutes);
                 var tags = new TagRegistry();
                 var ctx = new PlantContext(clock, tags);
                 var engine = new SimEngine(clock);
 
                 Console.WriteLine($"[CLOCK] Simulation time: {clock.Now:yyyy-MM-dd HH:mm:ss dddd}");
                 Console.WriteLine($"[CLOCK] Speed: {simSpeed}x (1 real second = {simSpeed} sim seconds)");
-                Console.WriteLine($"[CLOCK] Shift: {clock.ShiftLabel}");
+                Console.WriteLine($"[CLOCK] Shift: {clock.ShiftLabel} ({shiftMinutes} real-min per shift)");
                 Console.WriteLine();
 
                 // 2. Register all tags (this defines the OPC UA address space)
@@ -71,6 +79,12 @@ namespace BatchPlant
                 // 4. Register simulation components
                 var flusher = new TagFlusher(tags);
                 engine.Register(flusher);
+
+                // Shift window: publishes the numbered-shift tags and services SHIFT_RESET.
+                // Priority 5 => runs before the line controllers, so a reset lands on the
+                // same tick they roll their per-shift counters over.
+                engine.Register(new ShiftManager(ctx));
+                Console.WriteLine($"[SHIFT] Shift manager registered (shift 1 on boot, {shiftMinutes} real-min per shift, SHIFT_RESET tag)");
 
                 // Area 800: Utilities (no dependencies)
                 var area800 = new Area800_UtilitiesController(ctx);
@@ -129,8 +143,15 @@ namespace BatchPlant
                 // Batch Manager - observes state transitions, assigns Batch IDs, collects report parameters
                 var batchManager = new BatchManager(ctx);
                 batchManager.ConnectInstructionSource(() => area200.ActiveInstruction);
+                batchManager.ConnectBuffers(area450);   // buffer level + per-order delivered qty
+                batchManager.ConnectWorkOrderQueue(workOrderQueue);   // distinguishes Blocked from Idle
                 engine.Register(batchManager);
                 Console.WriteLine("[BATCH] BatchManager registered - observing Area 200/300/400, writing records to ./batch-records/");
+
+                // Downtime Manager - latches downtime edges for both lines into the API queue
+                var downtimeManager = new DowntimeManager(ctx);
+                engine.Register(downtimeManager);
+                Console.WriteLine("[DOWNTIME] Downtime manager registered (latches DowntimeStarted/Ended for both lines)");
 
                 // Power Metering - 5 meters at MCC level, one per work center
                 var powerMetering = new PowerMeteringController(ctx);
@@ -153,6 +174,7 @@ namespace BatchPlant
                 var apiServer = new ApiServer(workOrderQueue, tags, packagingQueue);
                 batchManager.ConnectApiServer(apiServer);
                 area500.ConnectApiServer(apiServer);
+                downtimeManager.ConnectApiServer(apiServer);
                 var builder = WebApplication.CreateBuilder();
                 builder.WebHost.UseUrls($"http://0.0.0.0:{apiPort}");
                 builder.Logging.ClearProviders(); // don't pollute console with ASP.NET logs
@@ -165,13 +187,13 @@ namespace BatchPlant
                 Console.WriteLine($"[API]   POST /api/work-order      - Dispatch work order");
                 Console.WriteLine($"[API]   POST /api/packaging-order - Dispatch packaging order (gates pack line)");
                 Console.WriteLine($"[API]   GET  /api/packaging/completed - Poll completed packaging run");
+                Console.WriteLine($"[API]   GET  /api/downtime/events     - Drain queued downtime events");
                 Console.WriteLine($"[API]   GET  /api/status          - Queue and batch status");
 
                 // Write initial sim metadata
                 tags.Write("SIM_SPEED", simSpeed);
                 tags.Write("SIM_TIME", clock.Now);
                 tags.Write("PLANT_MODE", "Idle");
-                tags.Write("SHIFT_ID", clock.CurrentShift.ToString());
 
                 Console.WriteLine("═══════════════════════════════════════════════════════════════");
                 Console.WriteLine("  Server is running. Connect with any OPC UA client to:");
@@ -262,7 +284,6 @@ namespace BatchPlant
 
             // Update sim time tag
             tags.Write("SIM_TIME", simNow);
-            tags.Write("SHIFT_ID", _ctx.Clock.CurrentShift.ToString());
 
             // Area 100: owned by Area100_RawMaterialsController (not touched here)
             // Area 200: owned by Area200_PreMixController (not touched here)
@@ -275,7 +296,7 @@ namespace BatchPlant
             _logCounter++;
             if (_logCounter % 100 == 0) // Every 10 seconds at 100ms tick rate
             {
-                Console.WriteLine($"[{simNow:HH:mm:ss}] {_ctx.Clock.CurrentShift} shift | {tags.TagCount} tags | Idle");
+                Console.WriteLine($"[{simNow:HH:mm:ss}] {_ctx.Clock.ShiftLabel} | {tags.TagCount} tags | Idle");
             }
         }
     }

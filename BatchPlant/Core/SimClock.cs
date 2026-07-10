@@ -1,15 +1,18 @@
 namespace BatchPlant.Core
 {
-    public enum ShiftType
-    {
-        Day,    // 06:00 - 14:00
-        Swing,  // 14:00 - 22:00
-        Night   // 22:00 - 06:00
-    }
-
     /// <summary>
     /// Plant simulation clock with time acceleration support.
     /// All simulation components use this instead of DateTime.Now.
+    ///
+    /// Shifts are numbered rather than named: the plant starts on shift 1 when the
+    /// simulator boots and rolls over to the next shift every ShiftDurationMinutes.
+    /// ResetShift() re-anchors the window so the count returns to shift 1 (driven by
+    /// the writable SHIFT_RESET tag).
+    ///
+    /// The shift window is measured in REAL (wall-clock) minutes, not simulation
+    /// minutes, so it is unaffected by SpeedMultiplier. Per-shift runtime/downtime
+    /// counters therefore also accumulate wall minutes (see SimToWall), which keeps
+    /// runtime + downtime == ShiftElapsedMinutes <= ShiftDurationMinutes.
     /// </summary>
     public class SimClock
     {
@@ -17,40 +20,72 @@ namespace BatchPlant.Core
         private readonly DateTime _simStart;
         private readonly object _lock = new();
 
+        /// <summary>Real (wall-clock) minutes per shift. The shift number increments each time this elapses.</summary>
+        public double ShiftDurationMinutes { get; }
+
+        /// <summary>Total wall time the engine has advanced (excludes any time the engine is stopped).</summary>
+        private TimeSpan _wallElapsed;
+
+        /// <summary>Wall-elapsed mark the current shift sequence is measured from (moved by ResetShift).</summary>
+        private TimeSpan _shiftAnchorWall;
+
         public double SpeedMultiplier { get; set; }
         public DateTime Now { get; private set; }
         public TimeSpan SimElapsed => Now - _simStart;
+        public TimeSpan WallElapsed { get { lock (_lock) { return _wallElapsed; } } }
         public DayOfWeek DayOfWeek => Now.DayOfWeek;
         public int Hour => Now.Hour;
         public int Minute => Now.Minute;
 
-        public ShiftType CurrentShift
+        /// <summary>Current shift number: 1 on boot (and after a reset), +1 every shift window.</summary>
+        public int CurrentShift
         {
             get
             {
-                int h = Hour;
-                if (h >= 6 && h < 14) return ShiftType.Day;
-                if (h >= 14 && h < 22) return ShiftType.Swing;
-                return ShiftType.Night;
+                lock (_lock)
+                {
+                    double mins = (_wallElapsed - _shiftAnchorWall).TotalMinutes;
+                    if (mins < 0) mins = 0;
+                    return 1 + (int)(mins / ShiftDurationMinutes);
+                }
             }
         }
 
-        public string ShiftLabel => CurrentShift switch
+        /// <summary>Real minutes elapsed within the current shift window.</summary>
+        public double ShiftElapsedMinutes
         {
-            ShiftType.Day => "Day (06:00-14:00)",
-            ShiftType.Swing => "Swing (14:00-22:00)",
-            ShiftType.Night => "Night (22:00-06:00)",
-            _ => "Unknown"
-        };
+            get
+            {
+                lock (_lock)
+                {
+                    double mins = (_wallElapsed - _shiftAnchorWall).TotalMinutes;
+                    if (mins < 0) mins = 0;
+                    return mins % ShiftDurationMinutes;
+                }
+            }
+        }
+
+        public string ShiftLabel => $"Shift {CurrentShift}";
+
+        /// <summary>Re-anchor the shift window at the current instant: the count returns to shift 1.</summary>
+        public void ResetShift()
+        {
+            lock (_lock)
+            {
+                _shiftAnchorWall = _wallElapsed;
+            }
+        }
 
         /// <summary>
         /// Creates a new SimClock.
         /// </summary>
         /// <param name="simStart">What simulation time to start at. Defaults to next Monday 06:00.</param>
         /// <param name="speedMultiplier">Time acceleration factor. 1.0 = real-time, 60.0 = 1 day in 24 min.</param>
-        public SimClock(DateTime? simStart = null, double speedMultiplier = 1.0)
+        /// <param name="shiftDurationMinutes">Real (wall-clock) minutes per shift. Defaults to 90.</param>
+        public SimClock(DateTime? simStart = null, double speedMultiplier = 1.0, double shiftDurationMinutes = 90.0)
         {
             SpeedMultiplier = speedMultiplier;
+            ShiftDurationMinutes = shiftDurationMinutes > 0 ? shiftDurationMinutes : 90.0;
             _wallStart = DateTime.UtcNow;
 
             if (simStart.HasValue)
@@ -67,6 +102,8 @@ namespace BatchPlant.Core
             }
 
             Now = _simStart;
+            _wallElapsed = TimeSpan.Zero;
+            _shiftAnchorWall = TimeSpan.Zero;   // boot on shift 1
         }
 
         /// <summary>
@@ -79,6 +116,7 @@ namespace BatchPlant.Core
             lock (_lock)
             {
                 Now += simDelta;
+                _wallElapsed += wallDelta;   // drives the wall-clock shift window
             }
             return simDelta;
         }
