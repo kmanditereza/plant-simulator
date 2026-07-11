@@ -153,6 +153,11 @@ namespace BatchPlant
                 engine.Register(downtimeManager);
                 Console.WriteLine("[DOWNTIME] Downtime manager registered (latches DowntimeStarted/Ended for both lines)");
 
+                // Fault Manager - latches equipment fault onsets (FailureOccurred) for both lines
+                var faultManager = new FaultManager(ctx);
+                engine.Register(faultManager);
+                Console.WriteLine("[FAULT] Fault manager registered (latches FailureOccurred per machine for both lines)");
+
                 // Power Metering - 5 meters at MCC level, one per work center
                 var powerMetering = new PowerMeteringController(ctx);
                 engine.Register(powerMetering);
@@ -175,6 +180,7 @@ namespace BatchPlant
                 batchManager.ConnectApiServer(apiServer);
                 area500.ConnectApiServer(apiServer);
                 downtimeManager.ConnectApiServer(apiServer);
+                faultManager.ConnectApiServer(apiServer);
                 var builder = WebApplication.CreateBuilder();
                 builder.WebHost.UseUrls($"http://0.0.0.0:{apiPort}");
                 builder.Logging.ClearProviders(); // don't pollute console with ASP.NET logs

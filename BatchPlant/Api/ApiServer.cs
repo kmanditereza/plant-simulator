@@ -81,6 +81,9 @@ namespace BatchPlant.Api
             // Downtime events (queued, latched via DOWNTIME_EVENT_PENDING)
             app.MapGet("/api/downtime/events", HandleGetDowntimeEvents);
             app.MapPost("/api/downtime/events/ack", HandleAckDowntimeEvents);
+            // Equipment fault events (queued, latched via FAULT_EVENT_PENDING)
+            app.MapGet("/api/fault/events", HandleGetFaultEvents);
+            app.MapPost("/api/fault/events/ack", HandleAckFaultEvents);
         }
 
         // ================= Downtime events =================
@@ -128,6 +131,55 @@ namespace BatchPlant.Api
                 _tags?.Write("DOWNTIME_EVENT_PENDING", remaining > 0);
             }
             Console.WriteLine($"[API] Downtime events acked: {removed} (remaining {remaining})");
+            return Results.Ok(new { status = "acknowledged", removed, pending = remaining });
+        }
+
+        // ---- Equipment fault events -------------------------------------------------
+        // Same latched-queue design as downtime: FaultManager edge-detects each machine
+        // fault on the simulation tick and enqueues here. A filler breakdown lasts only a
+        // few plant-minutes (seconds of wall time), so polling the fault flag would miss
+        // short faults; the bridge drains this queue instead and acks how many it published.
+        private readonly Queue<object> _faultEvents = new();
+
+        /// <summary>Called by FaultManager on each fault onset edge. Sets the pending latch.</summary>
+        public void EnqueueFaultEvent(object evt)
+        {
+            lock (_eventLock)
+            {
+                _faultEvents.Enqueue(evt);
+                _tags?.Write("FAULT_EVENT_PENDING", true);
+            }
+        }
+
+        private IResult HandleGetFaultEvents(HttpContext ctx)
+        {
+            lock (_eventLock)
+            {
+                var events = _faultEvents.ToArray();
+                return Results.Ok(new { pending = events.Length, events });
+            }
+        }
+
+        private IResult HandleAckFaultEvents(HttpContext ctx)
+        {
+            using var reader = new StreamReader(ctx.Request.Body);
+            var body = reader.ReadToEndAsync().Result;
+            int count = 0;
+            try { count = JsonNode.Parse(body)?["count"]?.GetValue<int>() ?? 0; } catch { }
+
+            int removed = 0;
+            int remaining;
+            lock (_eventLock)
+            {
+                while (removed < count && _faultEvents.Count > 0)
+                {
+                    _faultEvents.Dequeue();
+                    removed++;
+                }
+                remaining = _faultEvents.Count;
+                _tags?.Write("FAULT_EVENT_PENDING", remaining > 0);
+            }
+            Console.WriteLine($"[API] Fault events acked: {removed} (remaining {remaining})");
             return Results.Ok(new { status = "acknowledged", removed, pending = remaining });
         }
 

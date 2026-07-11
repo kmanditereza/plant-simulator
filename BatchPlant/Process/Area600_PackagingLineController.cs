@@ -236,6 +236,12 @@ namespace BatchPlant.Process
             t.Write("PACK_LINE_GOOD_UNITS_SHIFT", (int)shiftGood);
             t.Write("PACK_LINE_SCRAP_UNITS_SHIFT", (int)shiftScrap);
 
+            // Shift quality KPIs, all from the same good/scrap so they stay mutually consistent.
+            long shiftTotal = shiftGood + shiftScrap;
+            t.Write("PACK_LINE_DEFECT_COUNT", (int)shiftScrap);
+            t.Write("PACK_LINE_DEFECT_RATE_PPM", shiftTotal > 0 ? Math.Round((double)shiftScrap / shiftTotal * 1_000_000.0, 1) : 0.0);
+            t.Write("PACK_LINE_FIRST_PASS_YIELD", shiftTotal > 0 ? Math.Round((double)shiftGood / shiftTotal * 100.0, 3) : 100.0);
+
             // Plant total production (across both lines - for now just packaging)
             t.Write("PLANT_TOTAL_PRODUCTION_TODAY", _casesToday);
 

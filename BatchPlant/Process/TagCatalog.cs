@@ -689,6 +689,7 @@ namespace BatchPlant.Process
             tags.Define("BATCH_RELEASED", BuiltInType.Boolean, p, description: "Batch Released flag - true when batch is QA released, reset via POST /api/batch/released/ack", writable: true);
             tags.Define("PACK_ORDER_COMPLETED", BuiltInType.Boolean, p, description: "Packaging Run Completed flag - true when a packaging order finishes, reset via POST /api/packaging/completed/ack", writable: true);
             tags.Define("DOWNTIME_EVENT_PENDING", BuiltInType.Boolean, p, description: "One or more downtime events are queued - GET /api/downtime/events then POST /api/downtime/events/ack", writable: true);
+            tags.Define("FAULT_EVENT_PENDING", BuiltInType.Boolean, p, description: "One or more equipment fault events are queued - GET /api/fault/events then POST /api/fault/events/ack", writable: true);
             tags.Define("BATCH_LINE_QUEUED", BuiltInType.Boolean, p, description: "Batch line holding new-batch starts because all buffer tanks are full", initialValue: false);
             tags.Define("BATCH_ID", BuiltInType.String, p, description: "Current Batch ID", initialValue: "");
             tags.Define("BATCH_STATUS", BuiltInType.String, p, description: "Batch Status", initialValue: "IDLE");
@@ -745,6 +746,31 @@ namespace BatchPlant.Process
             tags.Define("BATCH_LINE_ORDER_QTY_TARGET", BuiltInType.Double, p, "kg", "Target quantity of the work order on the line (0 = idle)", 0.0);
             tags.Define("BATCH_LINE_ORDER_QTY_GOOD", BuiltInType.Double, p, "kg", "Good quantity completed for the order: product delivered into the buffer so far (0 = idle)", 0.0);
             tags.Define("BATCH_LINE_UPSTREAM_BUFFER_LEVEL", BuiltInType.Double, p, "kg", "Product held across all three Area 450 buffer tanks (same units as batch size)", 0.0);
+
+            // Recipe identity + actual performance of the batch on the line.
+            tags.Define("BATCH_LINE_RECIPE_ID", BuiltInType.String, p, description: "Master recipe of the batch on the line ('' = idle)", initialValue: "");
+            tags.Define("BATCH_LINE_RECIPE_VERSION", BuiltInType.String, p, description: "Master recipe version of the batch on the line ('' = idle)", initialValue: "");
+            tags.Define("BATCH_LINE_BATCH_YIELD_PCT", BuiltInType.Double, p, "%", "Yield of the batch on the line: bulk delivered to buffer vs order target. Holds the last completed batch's yield while idle.", 0.0);
+            tags.Define("BATCH_LINE_CYCLE_TIME_ACTUAL_MIN", BuiltInType.Double, p, "min", "Actual cycle time of the batch on the line, elapsed so far. Holds the last completed batch's cycle time while idle.", 0.0);
+            tags.Define("BATCH_LINE_PHASE_TARGET_DURATION", BuiltInType.Double, p, "sec", "Control recipe's target duration for the current phase; 0 where the phase is quantity- or setpoint-driven rather than timed. Compare with BATCH_LINE_PHASE_ELAPSED.", 0.0);
+
+            // Batch outcome: actual vs theoretical, with the batch they describe and a flag saying
+            // whether they are final. Unlike BATCH_LINE_ORDER_QTY_* (which zero on idle because they
+            // track order progress), these HOLD the last completed batch so a consumer can read the
+            // outcome after the line has gone idle. BATCH_LINE_BATCH_COMPLETE says which it is:
+            // false = a batch is on the line and these are live/partial; true = they are final.
+            tags.Define("BATCH_LINE_BATCH_ID", BuiltInType.String, p, description: "Batch the outcome tags below describe: the batch on the line, or the last one completed while idle ('' = none yet)", initialValue: "");
+            tags.Define("BATCH_LINE_BATCH_TARGET_KG", BuiltInType.Double, p, "kg", "Theoretical output of BATCH_LINE_BATCH_ID: the control recipe's target quantity. Holds while idle.", 0.0);
+            tags.Define("BATCH_LINE_BATCH_ACTUAL_KG", BuiltInType.Double, p, "kg", "Actual output of BATCH_LINE_BATCH_ID: bulk delivered into the Area 450 buffer, cumulative. Holds while idle.", 0.0);
+            tags.Define("BATCH_LINE_BATCH_COMPLETE", BuiltInType.Boolean, p, description: "True when BATCH_LINE_BATCH_ID has finished and the batch outcome tags (ACTUAL/TARGET/YIELD/CYCLE_TIME) are final. False while a batch is running and those values are still accumulating.", initialValue: false);
+
+            // One-shot latch for a KPI consumer that must act exactly once per completed batch.
+            // Distinct from BatchControl/BATCH_COMPLETED, which the batch-lifecycle bridge clears
+            // via POST /api/batch/completed/ack -- two consumers sharing one latch would race, each
+            // clearing the other's work. Set true on the completion edge only; the consumer writes
+            // false when it has published. Never re-written per tick: a pending write would shadow
+            // the consumer's false in TagRegistry.Read().
+            tags.Define("BATCH_LINE_YIELD_PENDING", BuiltInType.Boolean, p, description: "Latched true when a batch completes and its yield KPI has not yet been published. The KPI consumer writes false to clear it. Independent of BatchControl/BATCH_COMPLETED.", initialValue: false, writable: true);
 
             // Single downtime flag + the one reason explaining the line's current state.
             tags.Define("BATCH_LINE_DOWNTIME", BuiltInType.Boolean, p, description: "Batch Line is down (stopped for a loss reason). Idle = nothing scheduled, not downtime.");
@@ -839,6 +865,14 @@ namespace BatchPlant.Process
             tags.Define("PACK_LINE_GOOD_UNITS_SHIFT", BuiltInType.Int32, p, "units", "Good Units Produced This Shift", 0);
             tags.Define("PACK_LINE_SCRAP_UNITS_SHIFT", BuiltInType.Int32, p, "units", "Scrap/Reject Units This Shift", 0);
 
+            // Quality KPIs, shift-scoped, all derived from the same line-global good/scrap counts
+            // (a unit is good only once it clears every station: filler checkweigher, labeler,
+            // X-ray, metal detector). Reset each shift with the counters above. Coherent by
+            // construction: FIRST_PASS_YIELD = 100 - DEFECT_RATE_PPM/10000.
+            tags.Define("PACK_LINE_DEFECT_COUNT", BuiltInType.Int32, p, "units", "Defective (rejected) units this shift, all stations. Same as PACK_LINE_SCRAP_UNITS_SHIFT, named as the quality KPI.", 0);
+            tags.Define("PACK_LINE_DEFECT_RATE_PPM", BuiltInType.Double, p, "ppm", "Defect rate this shift in parts per million: scrap / (good + scrap) * 1e6. 0 before any unit is produced.", 0.0);
+            tags.Define("PACK_LINE_FIRST_PASS_YIELD", BuiltInType.Double, p, "%", "First pass yield this shift: good / (good + scrap) * 100 across all stations. 100 before any unit is produced.", 100.0);
+
             tags.Define("PACK_LINE_SPEED", BuiltInType.Double, p, "BPM", "Current Line Speed", 0.0);
             tags.Define("PACK_LINE_TARGET_SPEED", BuiltInType.Double, p, "BPM", "Target Line Speed", 200.0);
             tags.Define("PACK_LINE_CYCLE_TIME", BuiltInType.Double, p, "sec", "Current Cycle Time (per unit)", 0.0);
@@ -850,6 +884,7 @@ namespace BatchPlant.Process
 
             tags.Define("PACK_LINE_RUNTIME_MIN_SHIFT", BuiltInType.Double, p, "min", "Packaging Line Runtime This Shift, real minutes", 0.0);
             tags.Define("PACK_LINE_DOWNTIME_MIN_SHIFT", BuiltInType.Double, p, "min", "Packaging Line Downtime This Shift, real minutes (order active but not running)", 0.0);
+            tags.Define("PACK_LINE_RUNTIME_SINCE_FAILURE_MIN", BuiltInType.Double, p, "min", "Filler run time since its wear was last reset, in plant minutes. Accrues only while the filler is running. Resets to 0 when a wear-out (condition/high-vibration) fault is repaired or the unit is serviced; a random jam breakdown clears without resetting it. This is the wear clock behind speed loss and vibration, not a shift counter.", 0.0);
 
             // Shift context, mirrored from PlantStatus so this folder is self-contained for
             // line-scoped consumers (Ignition UDTs, OEE dashboards). Tag names are globally

@@ -98,6 +98,16 @@ namespace BatchPlant.Batch
         private double _runtimeMinShift;
         private double _downtimeMinShift;
 
+        // Last completed batch's outcome. The "actual" tags hold these while the line is idle,
+        // so a dashboard still shows the finished batch rather than snapping to zero.
+        private double _lastCycleMin;
+        private double _lastYieldPct;
+        private double _lastTargetKg;
+        private double _lastActualKg;
+        private string _lastBatchId = "";
+        private readonly List<double> _recentCycleMin = new();
+        private const int CycleWindow = 10;
+
         // Retain recent completed records for inspection
         private readonly List<BatchRecord> _completedRecords = new();
         private const int MaxRetainedRecords = 50;
@@ -340,6 +350,10 @@ namespace BatchPlant.Batch
                 batchId = $"B-{simNow:yyyyMMdd}-{_batchCounterForDate:D3}";
             }
 
+            // Work-order-assigned batch IDs repeat when the order is re-dispatched, so the buffer's
+            // per-batch delivery ledger must start empty for this run rather than resume the last one.
+            _buffers?.BeginBatch(batchId);
+
             var record = new BatchRecord
             {
                 BatchId = batchId,
@@ -400,6 +414,22 @@ namespace BatchPlant.Batch
                 t.Write("BATCH_LINE_ORDER_QTY_TARGET", Math.Round(primary.Instruction?.BatchSizeKg ?? 0.0, 2));
                 t.Write("BATCH_LINE_ORDER_QTY_GOOD", Math.Round(_buffers?.DeliveredKgFor(primary.Record.BatchId) ?? 0.0, 2));
 
+                // Recipe identity of the batch on the line.
+                t.Write("BATCH_LINE_RECIPE_ID", primary.Instruction?.MasterRecipeId ?? "");
+                t.Write("BATCH_LINE_RECIPE_VERSION", primary.Instruction?.MasterRecipeVersion ?? "");
+
+                // Actual cycle time so far, and yield achieved so far, for the batch on the line.
+                double targetKg = primary.Instruction?.BatchSizeKg ?? 0.0;
+                double deliveredKg = _buffers?.DeliveredKgFor(primary.Record.BatchId) ?? 0.0;
+                t.Write("BATCH_LINE_CYCLE_TIME_ACTUAL_MIN", Math.Round((simNow - primary.Record.StartTime).TotalMinutes, 2));
+                t.Write("BATCH_LINE_BATCH_YIELD_PCT", Math.Round(targetKg > 0 ? deliveredKg / targetKg * 100.0 : 0.0, 2));
+
+                // Batch outcome, live. BATCH_LINE_BATCH_COMPLETE (below) is false here, so a
+                // consumer knows ACTUAL is still accumulating and will fall short of TARGET.
+                t.Write("BATCH_LINE_BATCH_ID", primary.Record.BatchId);
+                t.Write("BATCH_LINE_BATCH_TARGET_KG", Math.Round(targetKg, 2));
+                t.Write("BATCH_LINE_BATCH_ACTUAL_KG", Math.Round(deliveredKg, 2));
+
                 // Determine current phase from the most recent active tracker for the primary's area
                 string currentArea = _byArea.FirstOrDefault(kv => kv.Value == primary).Key ?? "";
                 string phaseLabel = "";
@@ -426,6 +456,7 @@ namespace BatchPlant.Batch
                 // BatchLine-folder view of the active phase
                 t.Write("BATCH_LINE_CURRENT_PHASE", phaseLabel);
                 t.Write("BATCH_LINE_PHASE_ELAPSED", Math.Round(phaseElapsedSec, 0));
+                t.Write("BATCH_LINE_PHASE_TARGET_DURATION", PhaseTargetDurationSec(primary.Instruction, phaseLabel));
             }
             else
             {
@@ -436,6 +467,16 @@ namespace BatchPlant.Batch
                 t.Write("BATCH_LINE_PROCESS_ORDER", "");
                 t.Write("BATCH_LINE_ORDER_QTY_TARGET", 0.0);
                 t.Write("BATCH_LINE_ORDER_QTY_GOOD", 0.0);
+                t.Write("BATCH_LINE_RECIPE_ID", "");
+                t.Write("BATCH_LINE_RECIPE_VERSION", "");
+                t.Write("BATCH_LINE_PHASE_TARGET_DURATION", 0.0);
+
+                // Idle: hold the last completed batch's outcome rather than snapping to zero.
+                t.Write("BATCH_LINE_CYCLE_TIME_ACTUAL_MIN", Math.Round(_lastCycleMin, 2));
+                t.Write("BATCH_LINE_BATCH_YIELD_PCT", Math.Round(_lastYieldPct, 2));
+                t.Write("BATCH_LINE_BATCH_ID", _lastBatchId);
+                t.Write("BATCH_LINE_BATCH_TARGET_KG", Math.Round(_lastTargetKg, 2));
+                t.Write("BATCH_LINE_BATCH_ACTUAL_KG", Math.Round(_lastActualKg, 2));
                 t.Write("BATCH_PHASE", "");
                 t.Write("BATCH_PHASE_TMR", 0.0);
 
@@ -470,6 +511,15 @@ namespace BatchPlant.Batch
             t.Write("BATCH_LINE_DOWNTIME", downtime);
             t.Write("BATCH_LINE_STATE_REASON", reason);
 
+            // Completed-batch cycle times (previously defined but never written).
+            // Are the batch outcome tags final? They are exactly when no batch is on the line and
+            // at least one has completed. Derived rather than latched, so it needs no acknowledge
+            // and cannot be raced by the BatchControl/BATCH_COMPLETED ack that Node-RED issues.
+            t.Write("BATCH_LINE_BATCH_COMPLETE", _byArea.Count == 0 && !string.IsNullOrEmpty(_lastBatchId));
+
+            t.Write("LAST_BATCH_CYCLE_MIN", Math.Round(_lastCycleMin, 2));
+            t.Write("AVG_BATCH_CYCLE_MIN", _recentCycleMin.Count > 0 ? Math.Round(_recentCycleMin.Average(), 2) : 0.0);
+
             t.Write("BATCHES_TODAY", _batchesToday);
             t.Write("BATCHES_SHIFT", _batchesThisShift);
             t.Write("BATCH_LINE_GOOD_BATCHES_SHIFT", _goodBatchesThisShift);
@@ -482,11 +532,45 @@ namespace BatchPlant.Batch
         /// Called externally when we detect a batch has been fully processed through the
         /// batch side (Area 400 completed). Writes the record and archives it.
         /// </summary>
+        /// <summary>
+        /// The control recipe's target duration for a phase, in seconds. Only the time-driven
+        /// phases have one: the dose phases run to a charge quantity, heat/cool run to a
+        /// temperature setpoint, and homogenise runs until the vessel is empty -- those return 0.
+        /// </summary>
+        private static double PhaseTargetDurationSec(BatchInstruction? instr, string phaseLabel)
+        {
+            if (instr == null) return 0.0;
+            return phaseLabel switch
+            {
+                "PreMix.HighShearMix"     => instr.MixDurationSec,
+                "Cook.PasteurizationHold" => instr.HoldDurationSec,
+                "Process.Deaerate"        => instr.DeaerateTimeSec,
+                _                         => 0.0
+            };
+        }
+
         private void CompleteBatch(ActiveBatch batch, DateTime simNow)
         {
             batch.Record.EndTime = simNow;
             batch.Record.Status = BatchStatus.Complete;
             batch.Record.CurrentStage = BatchStage.Complete;
+
+            // Freeze this batch's outcome. Yield is the bulk actually delivered into the buffer
+            // against the order's target quantity -- Area 400 has finished transferring by now,
+            // so the delivered figure is final.
+            _lastCycleMin = (simNow - batch.Record.StartTime).TotalMinutes;
+            _recentCycleMin.Add(_lastCycleMin);
+            if (_recentCycleMin.Count > CycleWindow) _recentCycleMin.RemoveAt(0);
+
+            double targetKg = batch.Instruction?.BatchSizeKg ?? 0.0;
+            double deliveredKg = _buffers?.DeliveredKgFor(batch.Record.BatchId) ?? 0.0;
+            _lastYieldPct = targetKg > 0 ? deliveredKg / targetKg * 100.0 : 0.0;
+            _lastTargetKg = targetKg;
+            _lastActualKg = deliveredKg;
+            _lastBatchId = batch.Record.BatchId;
+
+            // Edge-only. The yield KPI bridge polls this and writes false once it has published.
+            _ctx.Tags.Write("BATCH_LINE_YIELD_PENDING", true);
 
             _batchesToday++;
             _batchesThisShift++;

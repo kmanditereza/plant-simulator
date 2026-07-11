@@ -94,6 +94,19 @@ namespace BatchPlant.Process
             return 0; // all tanks full or draining
         }
 
+        /// <summary>
+        /// Open a fresh delivery ledger for a batch that is starting.
+        ///
+        /// Batch IDs are not unique over the life of the process: a work order re-dispatched from its
+        /// retained UNS message yields a new batch carrying the same BatchId. Without this reset the
+        /// ledger keeps summing across those runs, so DeliveredKgFor reports the total of every run
+        /// under that ID rather than the current one, and yield climbs without bound (2x, 3x, ...).
+        /// </summary>
+        public void BeginBatch(string batchId)
+        {
+            if (!string.IsNullOrEmpty(batchId)) _deliveredLByBatch.Remove(batchId);
+        }
+
         /// <summary>Accumulate what this batch has delivered into the buffer, and pass the volume through.</summary>
         private double RecordDelivery(string batchId, double acceptedL)
         {

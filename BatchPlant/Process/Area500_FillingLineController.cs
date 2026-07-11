@@ -447,6 +447,8 @@ namespace BatchPlant.Process
             t.Write("PACK_LINE_TARGET_SPEED", TargetBpm);
             t.Write("PACK_LINE_RUNTIME_MIN_SHIFT", Math.Round(_runtimeMinShift, 4));
             t.Write("PACK_LINE_DOWNTIME_MIN_SHIFT", Math.Round(_downtimeMinShift, 4));
+            // Filler wear clock, plant minutes (RunHoursSinceService is in plant hours).
+            t.Write("PACK_LINE_RUNTIME_SINCE_FAILURE_MIN", Math.Round(Filler.RunHoursSinceService * 60.0, 2));
 
             // OEE calculation (simplified). Availability and performance are scoped to the
             // current shift, so the bottle count in the performance ratio must be the
