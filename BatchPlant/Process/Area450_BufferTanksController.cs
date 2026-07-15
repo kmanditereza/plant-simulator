@@ -15,12 +15,37 @@ namespace BatchPlant.Process
     ///   - DrawProduct(volume)           called by Area 500 filling line continuously
     ///
     /// Each tank has states:
-    ///   Empty    - available to start filling
-    ///   Filling  - currently being filled by Area 400
-    ///   Ready    - full, hot, waiting for Area 500 to draw
-    ///   Draining - Area 500 is pulling product
+    ///   Empty     - available to start filling
+    ///   Filling   - currently being filled by Area 400
+    ///   Ready     - full, hot, waiting for Area 500 to draw
+    ///   Draining  - Area 500 is pulling product
+    ///   Disposing - product is out of spec and is being pumped to waste
     ///
-    /// Temperature is maintained through insulation (very low heat loss coefficient).
+    /// Hot hold and disposition
+    /// ------------------------
+    /// This is a hot-fill line: MinHoldTempC (82 C) is a food-safety limit, not a preference.
+    /// Area 500 fills at >= 82 C so the product sterilises the container, and it will refuse
+    /// colder product outright.
+    ///
+    /// The tanks are therefore JACKETED and actively hold product at HoldSetpointC, exactly as a
+    /// real hot-fill surge tank does. Without that, product left in a tank coasts down to ambient
+    /// during any pause, and once it crosses 82 C it is simultaneously (a) too cold for the pack
+    /// line to ever draw and (b) still above TankEmptyThresholdL, so the tank never reports Empty
+    /// and the batch line blocks for want of a free tank. That is a permanent deadlock: the only
+    /// consumer of tank contents is the pack line, and it has just refused the contents forever.
+    ///
+    /// Holding alone is a mitigation, not a guarantee, so product also has a disposition path:
+    ///   - MaxHoldHours   the hot-hold clock. Holding hot degrades colour and viscosity, so product
+    ///                    held beyond this is out of spec and is dumped. This is the PRIMARY trigger:
+    ///                    without it the jacket would cheerfully reheat day-old bulk and the filler
+    ///                    would pack it.
+    ///   - OutOfSpecGrace how long the product may sit below MinHoldTempC before it is written off.
+    ///                    The grace period lets the jacket recover a dip (or a fresh, cooler charge)
+    ///                    without dumping product that would have come back to temperature; it only
+    ///                    fires when holding has genuinely failed.
+    /// Either way the tank drains to waste and returns to Empty, so the plant can always recover.
+    /// The dumped mass is reported as a holding loss, which is what makes a long stoppage cost
+    /// product rather than nothing.
     /// </summary>
     public class Area450_BufferTanksController : ISimulatable
     {
@@ -28,6 +53,7 @@ namespace BatchPlant.Process
         private readonly BufferTank _bt451;
         private readonly BufferTank _bt452;
         private readonly BufferTank _bt453;
+        private Api.ApiServer? _apiServer;
 
         public int Priority => 40;
 
@@ -35,6 +61,15 @@ namespace BatchPlant.Process
         private const double TankCapacityL = 5000;
         private const double TankFullThresholdL = 4500;  // tank becomes Ready at 90% full
         private const double TankEmptyThresholdL = 5;
+
+        /// <summary>Jacket setpoint. Sits above MinHoldTempC so held product keeps a margin over the fill limit.</summary>
+        private const double HoldSetpointC = 85.0;
+        /// <summary>Max hot-hold before the product is out of spec on quality (plant hours).</summary>
+        private const double MaxHoldHours = 8.0;
+        /// <summary>How long product may sit below MinHoldTempC before it is written off (plant minutes).</summary>
+        private const double OutOfSpecGraceMin = 20.0;
+        /// <summary>Rate the waste pump empties a condemned tank (L per plant minute).</summary>
+        private const double DisposalRateLPerMin = 300.0;
 
         /// <summary>Product density, matching the Vessel configuration below. Converts L -> kg.</summary>
         public const double ProductDensityKgL = 1.08;
@@ -60,12 +95,111 @@ namespace BatchPlant.Process
                                      "BT453_AGIT_RUN", "BT453_VLV_IN", "BT453_VLV_OUT");
         }
 
+        /// <summary>A tank of product condemned and pumped to waste.</summary>
+        public sealed class DisposalRecord
+        {
+            public string TankId = "";
+            public string BatchId = "";
+            public string Reason = "";      // HoldTimeExpired | TemperatureOutOfSpec
+            public double VolumeL;
+            public double Kg;
+            public double TempC;
+            public double HeldHours;
+            public DateTime At;
+        }
+
+        private double _disposedKgTotal;
+        private double _disposedKgShift;
+        private int _disposalsShift;
+        private int _lastShift;
+        private bool _shiftInit;
+
+        public void ConnectApiServer(Api.ApiServer apiServer) => _apiServer = apiServer;
+
         public void Tick(TimeSpan dt, DateTime simNow)
         {
             _bt451.Tick(dt, simNow);
             _bt452.Tick(dt, simNow);
             _bt453.Tick(dt, simNow);
+
+            // Rebase the holding-loss counters each shift, like the other _SHIFT counters.
+            int shift = _ctx.Clock.CurrentShift;
+            if (!_shiftInit || shift != _lastShift)
+            {
+                _shiftInit = true;
+                _lastShift = shift;
+                _disposedKgShift = 0;
+                _disposalsShift = 0;
+            }
+
+            // Collect any tank that finished dumping this tick.
+            foreach (var tank in new[] { _bt451, _bt452, _bt453 })
+            {
+                var d = tank.TakeDisposal();
+                if (d == null) continue;
+
+                _disposedKgTotal += d.Kg;
+                _disposedKgShift += d.Kg;
+                _disposalsShift++;
+
+                Console.WriteLine($"[{simNow:HH:mm:ss}] [BUFFER] {d.TankId}: DISPOSED {d.VolumeL:F0}L " +
+                                  $"({d.Kg:F0}kg) of batch {d.BatchId} -- {d.Reason} " +
+                                  $"(temp={d.TempC:F1}C, held={d.HeldHours:F1}h)");
+
+                _apiServer?.EnqueueDisposalEvent(BuildDisposalEvent(d));
+            }
+
+            var t = _ctx.Tags;
+            t.Write("BUFFER_HOLDING_LOSS_KG_SHIFT", Math.Round(_disposedKgShift, 1));
+            t.Write("BUFFER_HOLDING_LOSS_KG_TOTAL", Math.Round(_disposedKgTotal, 1));
+            t.Write("BUFFER_DISPOSALS_SHIFT", _disposalsShift);
+            t.Write("BT451_HOLD_MIN", Math.Round(_bt451.HoldElapsedMinutes, 1));
+            t.Write("BT452_HOLD_MIN", Math.Round(_bt452.HoldElapsedMinutes, 1));
+            t.Write("BT453_HOLD_MIN", Math.Round(_bt453.HoldElapsedMinutes, 1));
         }
+
+        /// <summary>
+        /// Standard production event. Published to Production/Events/ProductDisposed, so the generic
+        /// TimescaleDB and knowledge-graph ingests pick it up with no per-type wiring.
+        /// </summary>
+        private object BuildDisposalEvent(DisposalRecord d) => new
+        {
+            eventType = "ProductDisposed",
+            eventId = $"EVT-DISPOSED-{d.TankId}-{d.At.Ticks}",
+            eventVersion = "2.0",
+            timestamp = d.At.ToString("o"),
+            source = new
+            {
+                origin = "MES-LineMonitor",
+                uri = "opc.tcp://localhost:26543/BatchPlantServer",
+                gateway = "Ignition-Gateway-Munich-Line1",
+                originSystemId = 1030
+            },
+            correlationId = $"disposal-{d.TankId}-{d.At.Ticks}",
+            data = new
+            {
+                equipmentId = d.TankId,
+                producedBatch = d.BatchId,
+                isa95Context = new
+                {
+                    enterprise = "GlobalIndustries",
+                    site = "Munich",
+                    area = "ProductionArea",
+                    processCell = "Line1"
+                },
+                reason = d.Reason,
+                category = "HoldingLoss",
+                quantityL = Math.Round(d.VolumeL, 1),
+                quantityKg = Math.Round(d.Kg, 1),
+                temperatureC = Math.Round(d.TempC, 1),
+                heldHours = Math.Round(d.HeldHours, 2),
+                disposition = "Waste",
+                disposedAt = d.At.ToString("o"),
+                comment = "Bulk held in the buffer went out of specification and was pumped to waste; the " +
+                          "tank was returned to service. Product is filled hot, so bulk that falls below the " +
+                          "hot-fill limit, or that has been held hot beyond its permitted time, cannot be packed."
+            }
+        };
 
         // -------- Public API --------
 
@@ -255,7 +389,8 @@ namespace BatchPlant.Process
             Empty = 0,
             Filling = 1,
             Ready = 2,
-            Draining = 3
+            Draining = 3,
+            Disposing = 4   // out of spec, pumping to waste; returns to Empty
         }
 
         private class BufferTank
@@ -280,6 +415,29 @@ namespace BatchPlant.Process
             private const double FillIdleTimeoutSec = 10; // become Ready if no fills for 10 sec
             private const double DrawIdleTimeoutSec = 10; // back to Ready if no draws for 10 sec
 
+            // Hot-hold clock: starts when product first enters an empty tank, clears when it empties.
+            private DateTime? _holdStartTime;
+            // When the product first fell below the hot-fill limit (null = currently in spec).
+            private DateTime? _belowSpecSince;
+            // Disposal in progress: what we condemned and how much has gone to waste so far.
+            private string _disposalReason = "";
+            private double _disposalStartTempC;
+            private double _disposalHeldHours;
+            private double _disposedL;
+            private DisposalRecord? _completedDisposal;
+
+            /// <summary>How long this tank has been holding product (plant minutes); 0 when empty.</summary>
+            public double HoldElapsedMinutes =>
+                _holdStartTime.HasValue ? (_ctx.Clock.Now - _holdStartTime.Value).TotalMinutes : 0.0;
+
+            /// <summary>Pops the disposal record once a condemned tank has finished draining.</summary>
+            public DisposalRecord? TakeDisposal()
+            {
+                var d = _completedDisposal;
+                _completedDisposal = null;
+                return d;
+            }
+
             public BufferTank(PlantContext ctx, string name,
                               string tLevelL, string tLevelPct, string tTemp,
                               string tAgitRun, string tValveIn, string tValveOut)
@@ -299,7 +457,9 @@ namespace BatchPlant.Process
                     AmbientTemp = 22.0,
                     Density = 1.08,
                     HeatLossCoefficient = 0.000003, // highly insulated
-                    IsJacketed = false
+                    // Hot-fill surge tanks are jacketed and hold product at temperature. The jacket
+                    // setpoint is driven each tick (see Tick), not fixed here.
+                    IsJacketed = true
                 }.Bind(new VesselTagMap
                 {
                     Level = tLevelL,
@@ -314,13 +474,17 @@ namespace BatchPlant.Process
             /// </summary>
             public double ExternalFill(double volumeL, double tempC, string batchId = "")
             {
-                if (TankState == BufferTankState.Draining) return 0;
+                // A condemned tank takes no product until it has been emptied.
+                if (TankState == BufferTankState.Draining || TankState == BufferTankState.Disposing) return 0;
                 if (_vessel.Level >= TankCapacityL) return 0;
 
                 double room = TankCapacityL - _vessel.Level;
                 double accepted = Math.Min(volumeL, room);
                 _vessel.AddMaterial(accepted, tempC);
                 _lastFillTime = _ctx.Clock.Now;
+
+                // The hot-hold clock starts the moment product first lands in an empty tank.
+                _holdStartTime ??= _ctx.Clock.Now;
 
                 if (TankState == BufferTankState.Empty || TankState == BufferTankState.Ready)
                 {
@@ -353,6 +517,12 @@ namespace BatchPlant.Process
 
             public void Tick(TimeSpan dt, DateTime simNow)
             {
+                // The jacket holds product at temperature while the tank is in service. It is shut off
+                // for a condemned tank -- no point heating what is on its way to the drain.
+                _vessel.JacketTemp = (TankState == BufferTankState.Disposing)
+                    ? _vessel.AmbientTemp
+                    : HoldSetpointC;
+
                 // Passive state transitions based on level and idle timers
                 switch (TankState)
                 {
@@ -368,9 +538,7 @@ namespace BatchPlant.Process
                     case BufferTankState.Draining:
                         if (_vessel.Level <= TankEmptyThresholdL)
                         {
-                            TankState = BufferTankState.Empty;
-                            Console.WriteLine($"[{simNow:HH:mm:ss}] {_name}: -> Empty (was batch={BatchId})");
-                            BatchId = ""; // released — available for the next batch
+                            GoEmpty(simNow);
                         }
                         else if ((simNow - _lastDrawTime).TotalSeconds > DrawIdleTimeoutSec)
                         {
@@ -378,6 +546,34 @@ namespace BatchPlant.Process
                             TankState = BufferTankState.Ready;
                         }
                         break;
+
+                    case BufferTankState.Disposing:
+                        // Pump the condemned bulk to waste, then hand the tank back to production.
+                        double dump = _vessel.RemoveMaterial(DisposalRateLPerMin * dt.TotalMinutes);
+                        _disposedL += dump;
+                        if (_vessel.Level <= 0.01)
+                        {
+                            _completedDisposal = new DisposalRecord
+                            {
+                                TankId = _name,
+                                BatchId = BatchId,
+                                Reason = _disposalReason,
+                                VolumeL = _disposedL,
+                                Kg = _disposedL * ProductDensityKgL,
+                                TempC = _disposalStartTempC,
+                                HeldHours = _disposalHeldHours,
+                                At = simNow
+                            };
+                            GoEmpty(simNow);
+                        }
+                        break;
+                }
+
+                // Out-of-spec check on product actually in service. Draining is included: a tank can
+                // time out mid-draw, and product the pack line has stopped taking must not linger.
+                if (TankState == BufferTankState.Ready || TankState == BufferTankState.Draining)
+                {
+                    CheckOutOfSpec(simNow);
                 }
 
                 _vessel.Tick(dt, simNow);
@@ -389,10 +585,74 @@ namespace BatchPlant.Process
                 PublishStateTags();
             }
 
+            /// <summary>
+            /// Condemn product that can no longer be legally or safely packed.
+            ///
+            /// Two triggers, deliberately different in character:
+            ///   HoldTimeExpired      - held hot beyond MaxHoldHours. Quality, not temperature: the
+            ///                          product may be perfectly hot and still be too old to pack.
+            ///                          This is what stops the jacket quietly reheating stale bulk.
+            ///   TemperatureOutOfSpec - sat below the hot-fill limit for longer than the grace
+            ///                          period, i.e. holding has actually failed. The grace window
+            ///                          exists so a dip (or a cooler fresh charge still coming up to
+            ///                          temperature) is not mistaken for a failure.
+            /// </summary>
+            private void CheckOutOfSpec(DateTime simNow)
+            {
+                if (_vessel.Level <= TankEmptyThresholdL) return;   // nothing worth condemning
+
+                double heldHours = _holdStartTime.HasValue
+                    ? (simNow - _holdStartTime.Value).TotalHours : 0.0;
+
+                if (heldHours > MaxHoldHours)
+                {
+                    Condemn(simNow, "HoldTimeExpired", heldHours);
+                    return;
+                }
+
+                if (_vessel.Temperature < MinHoldTempC)
+                {
+                    _belowSpecSince ??= simNow;
+                    if ((simNow - _belowSpecSince.Value).TotalMinutes > OutOfSpecGraceMin)
+                    {
+                        Condemn(simNow, "TemperatureOutOfSpec", heldHours);
+                    }
+                }
+                else
+                {
+                    _belowSpecSince = null;   // back in spec; the jacket recovered it
+                }
+            }
+
+            private void Condemn(DateTime simNow, string reason, double heldHours)
+            {
+                _disposalReason = reason;
+                _disposalStartTempC = _vessel.Temperature;
+                _disposalHeldHours = heldHours;
+                _disposedL = 0;
+                TankState = BufferTankState.Disposing;
+                Console.WriteLine($"[{simNow:HH:mm:ss}] {_name}: -> Disposing ({_vessel.Level:F0}L of " +
+                                  $"batch {BatchId}, {reason}, temp={_vessel.Temperature:F1}C, held={heldHours:F1}h)");
+            }
+
+            /// <summary>Return the tank to service: empty, unbatched, hold clock cleared.</summary>
+            private void GoEmpty(DateTime simNow)
+            {
+                TankState = BufferTankState.Empty;
+                Console.WriteLine($"[{simNow:HH:mm:ss}] {_name}: -> Empty (was batch={BatchId})");
+                BatchId = "";
+                _holdStartTime = null;
+                _belowSpecSince = null;
+                _disposalReason = "";
+                _disposedL = 0;
+            }
+
             private void PublishStateTags()
             {
                 _ctx.Tags.Write(_tValveIn, TankState == BufferTankState.Filling);
-                _ctx.Tags.Write(_tValveOut, TankState == BufferTankState.Draining);
+                // The outlet is open both when feeding the filler and when pumping to waste.
+                _ctx.Tags.Write(_tValveOut, TankState == BufferTankState.Draining
+                                         || TankState == BufferTankState.Disposing);
                 // Tank occupancy + which bulk batch it holds (buffer→pack genealogy source)
                 var idBase = _agitBase.Replace("_AGIT", "");   // e.g. "BT451"
                 _ctx.Tags.Write($"{idBase}_STATE", (int)TankState);

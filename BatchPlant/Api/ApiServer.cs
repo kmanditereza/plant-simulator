@@ -84,6 +84,9 @@ namespace BatchPlant.Api
             // Equipment fault events (queued, latched via FAULT_EVENT_PENDING)
             app.MapGet("/api/fault/events", HandleGetFaultEvents);
             app.MapPost("/api/fault/events/ack", HandleAckFaultEvents);
+            // Buffer holding-loss / disposal events (queued, latched via DISPOSAL_EVENT_PENDING)
+            app.MapGet("/api/disposal/events", HandleGetDisposalEvents);
+            app.MapPost("/api/disposal/events/ack", HandleAckDisposalEvents);
         }
 
         // ================= Downtime events =================
@@ -180,6 +183,53 @@ namespace BatchPlant.Api
                 _tags?.Write("FAULT_EVENT_PENDING", remaining > 0);
             }
             Console.WriteLine($"[API] Fault events acked: {removed} (remaining {remaining})");
+            return Results.Ok(new { status = "acknowledged", removed, pending = remaining });
+        }
+
+        // ---- Buffer holding-loss (product disposal) events ---------------------------
+        // Same latched-queue design as downtime and faults: Area 450 condemns a tank on the
+        // simulation tick and enqueues here; the UNS bridge drains and acks.
+        private readonly Queue<object> _disposalEvents = new();
+
+        /// <summary>Called by Area 450 when a condemned tank finishes draining to waste.</summary>
+        public void EnqueueDisposalEvent(object evt)
+        {
+            lock (_eventLock)
+            {
+                _disposalEvents.Enqueue(evt);
+                _tags?.Write("DISPOSAL_EVENT_PENDING", true);
+            }
+        }
+
+        private IResult HandleGetDisposalEvents(HttpContext ctx)
+        {
+            lock (_eventLock)
+            {
+                var events = _disposalEvents.ToArray();
+                return Results.Ok(new { pending = events.Length, events });
+            }
+        }
+
+        private IResult HandleAckDisposalEvents(HttpContext ctx)
+        {
+            using var reader = new StreamReader(ctx.Request.Body);
+            var body = reader.ReadToEndAsync().Result;
+            int count = 0;
+            try { count = JsonNode.Parse(body)?["count"]?.GetValue<int>() ?? 0; } catch { }
+
+            int removed = 0;
+            int remaining;
+            lock (_eventLock)
+            {
+                while (removed < count && _disposalEvents.Count > 0)
+                {
+                    _disposalEvents.Dequeue();
+                    removed++;
+                }
+                remaining = _disposalEvents.Count;
+                _tags?.Write("DISPOSAL_EVENT_PENDING", remaining > 0);
+            }
+            Console.WriteLine($"[API] Disposal events acked: {removed} (remaining {remaining})");
             return Results.Ok(new { status = "acknowledged", removed, pending = remaining });
         }
 

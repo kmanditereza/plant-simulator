@@ -330,12 +330,24 @@ namespace BatchPlant.Process
             tags.Define("BT453_AGIT_FAILCNT", BuiltInType.Int32, bt3, description: "BT453 Agitator Cumulative Failure Count", initialValue: 0);
 
             // --- Tank occupancy + bulk-batch attribution (one batch per tank; buffer→pack genealogy) ---
-            tags.Define("BT451_STATE", BuiltInType.Int32, bt1, description: "BT451 State (0=Empty,1=Filling,2=Ready,3=Draining)", initialValue: 0);
+            tags.Define("BT451_STATE", BuiltInType.Int32, bt1, description: "BT451 State (0=Empty,1=Filling,2=Ready,3=Draining,4=Disposing)", initialValue: 0);
             tags.Define("BT451_BATCH_ID", BuiltInType.String, bt1, description: "BT451 Held Bulk Batch (produced batch no.)", initialValue: "");
-            tags.Define("BT452_STATE", BuiltInType.Int32, bt2, description: "BT452 State (0=Empty,1=Filling,2=Ready,3=Draining)", initialValue: 0);
+            tags.Define("BT452_STATE", BuiltInType.Int32, bt2, description: "BT452 State (0=Empty,1=Filling,2=Ready,3=Draining,4=Disposing)", initialValue: 0);
             tags.Define("BT452_BATCH_ID", BuiltInType.String, bt2, description: "BT452 Held Bulk Batch (produced batch no.)", initialValue: "");
-            tags.Define("BT453_STATE", BuiltInType.Int32, bt3, description: "BT453 State (0=Empty,1=Filling,2=Ready,3=Draining)", initialValue: 0);
+            tags.Define("BT453_STATE", BuiltInType.Int32, bt3, description: "BT453 State (0=Empty,1=Filling,2=Ready,3=Draining,4=Disposing)", initialValue: 0);
             tags.Define("BT453_BATCH_ID", BuiltInType.String, bt3, description: "BT453 Held Bulk Batch (produced batch no.)", initialValue: "");
+
+            // --- Hot-hold clock + holding losses -------------------------------------------------
+            // Product is filled hot (>= 82 C). Bulk held past its permitted hot-hold time, or that
+            // has fallen below the fill limit and cannot be recovered, is pumped to waste and the
+            // tank returns to service. That loss is booked here rather than against the batch, so it
+            // is attributed to the stoppage that caused it.
+            tags.Define("BT451_HOLD_MIN", BuiltInType.Double, bt1, "min", "Plant minutes BT451 has been holding product (0 = empty)", 0.0);
+            tags.Define("BT452_HOLD_MIN", BuiltInType.Double, bt2, "min", "Plant minutes BT452 has been holding product (0 = empty)", 0.0);
+            tags.Define("BT453_HOLD_MIN", BuiltInType.Double, bt3, "min", "Plant minutes BT453 has been holding product (0 = empty)", 0.0);
+            tags.Define("BUFFER_HOLDING_LOSS_KG_SHIFT", BuiltInType.Double, p, "kg", "Bulk condemned in the buffer and sent to waste this shift", 0.0);
+            tags.Define("BUFFER_HOLDING_LOSS_KG_TOTAL", BuiltInType.Double, p, "kg", "Bulk condemned in the buffer and sent to waste since startup", 0.0);
+            tags.Define("BUFFER_DISPOSALS_SHIFT", BuiltInType.Int32, p, description: "Number of buffer tanks condemned and dumped this shift", initialValue: 0);
         }
 
         private static void RegisterArea500(TagRegistry tags)
@@ -690,6 +702,7 @@ namespace BatchPlant.Process
             tags.Define("PACK_ORDER_COMPLETED", BuiltInType.Boolean, p, description: "Packaging Run Completed flag - true when a packaging order finishes, reset via POST /api/packaging/completed/ack", writable: true);
             tags.Define("DOWNTIME_EVENT_PENDING", BuiltInType.Boolean, p, description: "One or more downtime events are queued - GET /api/downtime/events then POST /api/downtime/events/ack", writable: true);
             tags.Define("FAULT_EVENT_PENDING", BuiltInType.Boolean, p, description: "One or more equipment fault events are queued - GET /api/fault/events then POST /api/fault/events/ack", writable: true);
+            tags.Define("DISPOSAL_EVENT_PENDING", BuiltInType.Boolean, p, description: "One or more buffer holding-loss (ProductDisposed) events are queued - GET /api/disposal/events then POST /api/disposal/events/ack", writable: true);
             tags.Define("BATCH_LINE_QUEUED", BuiltInType.Boolean, p, description: "Batch line holding new-batch starts because all buffer tanks are full", initialValue: false);
             tags.Define("BATCH_ID", BuiltInType.String, p, description: "Current Batch ID", initialValue: "");
             tags.Define("BATCH_STATUS", BuiltInType.String, p, description: "Batch Status", initialValue: "IDLE");

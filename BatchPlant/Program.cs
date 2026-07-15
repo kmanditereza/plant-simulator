@@ -181,6 +181,7 @@ namespace BatchPlant
                 area500.ConnectApiServer(apiServer);
                 downtimeManager.ConnectApiServer(apiServer);
                 faultManager.ConnectApiServer(apiServer);
+                area450.ConnectApiServer(apiServer);   // buffer holding-loss (ProductDisposed) events
                 var builder = WebApplication.CreateBuilder();
                 builder.WebHost.UseUrls($"http://0.0.0.0:{apiPort}");
                 builder.Logging.ClearProviders(); // don't pollute console with ASP.NET logs
