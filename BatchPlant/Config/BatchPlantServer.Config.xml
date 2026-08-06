@@ -55,7 +55,13 @@
   </TransportQuotas>
   <ServerConfiguration>
     <BaseAddresses>
-      <ua:String>opc.tcp://desktop-fjjsr46:26543/BatchPlantServer</ua:String>
+      <!-- Must be a hostname that OPC UA clients can resolve, because the server advertises this
+           exact string back in GetEndpoints and the client then opens its secure channel to it.
+           'plant-simulator' is the docker-compose service name, so every container on the stack
+           network (Ignition, Node-RED) resolves it, and it is stable across rebuilds. The previous
+           value was a developer's machine name that no container could resolve, which made Ignition
+           fail endpoint selection with "no matching endpoints found". -->
+      <ua:String>opc.tcp://plant-simulator:26543/BatchPlantServer</ua:String>
      </BaseAddresses>
     <SecurityPolicies>
       <ServerSecurityPolicy>
