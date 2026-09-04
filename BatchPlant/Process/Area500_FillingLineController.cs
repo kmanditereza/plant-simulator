@@ -92,6 +92,8 @@ namespace BatchPlant.Process
 
         // Condition monitoring for the capper head drive and discharge conveyor
         private readonly ConditionMonitor _cmCapper;
+        private readonly ConditionMonitor _cmInvTunnel;
+        private readonly ConditionMonitor _cmCoolTunnel;
         private readonly ConditionMonitor _cmConveyor;
 
         // Stoppages
@@ -120,14 +122,21 @@ namespace BatchPlant.Process
             _buffers = buffers;
             _packagingQueue = packagingQueue;
 
-            _cmCapper = new ConditionMonitor(ctx) { BaseVibration = 1.6, BearingRise = 30 };
+            _cmCapper = new ConditionMonitor(ctx){ BaseVibration = 1.6, BearingRise = 30 }
+                .Identify("EQ-MUC-CAP501", "Rotary Capper CAP-501", "Filling", "CAP_501_VIB");
             _cmCapper.SeedHours(250);
-            _cmConveyor = new ConditionMonitor(ctx) { BaseVibration = 1.2, BearingRise = 25 };
+            _cmConveyor = new ConditionMonitor(ctx){ BaseVibration = 1.2, BearingRise = 25 }
+                .Identify("EQ-MUC-CONV501", "Filling Line Conveyor CONV-501", "Filling", "CONV_501_VIB");
+            _cmInvTunnel = new ConditionMonitor(ctx){ BaseVibration = 1.1, BearingRise = 24 }
+                .Identify("EQ-MUC-IT501", "Inversion Tunnel IT-501", "Filling", "INV_TUNNEL_VIB");
+            _cmCoolTunnel = new ConditionMonitor(ctx){ BaseVibration = 1.3, BearingRise = 26 }
+                .Identify("EQ-MUC-CT501", "Cooling Tunnel CT-501", "Filling", "COOL_TUN_VIB");
             _cmConveyor.SeedHours(500);
 
             // FL-501: 12-head rotary piston filler
             Filler = new PistonFiller(ctx, "FL-501")
             {
+                AssetArea = "Filling",
                 TargetWeight = BottleWeightG,
                 BaseStdDev = 2.5,
                 WearDegradation = 0.4,
@@ -404,6 +413,9 @@ namespace BatchPlant.Process
             t.Write("INV_TUNNEL_TEMP_2", Math.Round(_invZone2Temp, 1));
             t.Write("INV_TUNNEL_SPD", Math.Round(_lineSpeed / 20.0, 2)); // ~m/min
             t.Write("INV_TUNNEL_RUN", _lineState == OperationalState.Running);
+            _cmInvTunnel.Update(_lineState == OperationalState.Running, 0.5, false, dt.TotalSeconds);
+            _cmInvTunnel.Publish(t, vibration: "INV_TUNNEL_VIB", bearingTemp: "INV_TUNNEL_BRGTEMP",
+                mcsa: "INV_TUNNEL_MCSA", failureCount: "INV_TUNNEL_FAILCNT");
 
             // Cooling tunnel (3 zones: in / mid / out)
             t.Write("COOL_TUN_TEMP_IN", Math.Round(_coolZoneInTemp, 1));
@@ -412,6 +424,9 @@ namespace BatchPlant.Process
             t.Write("COOL_TUN_SPRAY_FLOW", Math.Round(_lineState == OperationalState.Running ? _ctx.AddNoise(120.0, 2.0) : 0, 1));
             t.Write("COOL_TUN_SPRAY_TEMP", Math.Round(_ctx.AddNoise(8.0, 0.3), 1));
             t.Write("COOL_TUN_RUN", _lineState == OperationalState.Running);
+            _cmCoolTunnel.Update(_lineState == OperationalState.Running, 0.6, false, dt.TotalSeconds);
+            _cmCoolTunnel.Publish(t, vibration: "COOL_TUN_VIB", bearingTemp: "COOL_TUN_BRGTEMP",
+                mcsa: "COOL_TUN_MCSA", failureCount: "COOL_TUN_FAILCNT");
 
             // Conveyor
             t.Write("CONV_501_SPD", Math.Round(_lineSpeed, 1));

@@ -58,6 +58,7 @@ namespace BatchPlant.Process
 
         // Condition monitoring: labeler drive (rotating), case packer & palletizer (rotating + hydraulic)
         private readonly ConditionMonitor _cmLabeler;
+        private readonly ConditionMonitor _cmXray;
         private readonly ConditionMonitor _cmCasePacker;
         private readonly ConditionMonitor _cmPalletizer;
 
@@ -66,12 +67,17 @@ namespace BatchPlant.Process
             _ctx = ctx;
             _fillingLine = fillingLine;
 
-            _cmLabeler = new ConditionMonitor(ctx) { BaseVibration = 1.4, BearingRise = 28 };
+            _cmLabeler = new ConditionMonitor(ctx){ BaseVibration = 1.4, BearingRise = 28 }
+                .Identify("EQ-MUC-LBL601", "Labeler LBL-601", "Packaging", "LBL_601_VIB");
+            _cmXray = new ConditionMonitor(ctx){ BaseVibration = 0.9, BearingRise = 18 }
+                .Identify("EQ-MUC-XR601", "X-Ray Inspector XR-601", "Packaging", "XRAY_601_VIB");
             _cmLabeler.SeedHours(350);
             // Hydraulic case packer / palletizer: HPU pressure ~120 bar, lube + return filter.
-            _cmCasePacker = new ConditionMonitor(ctx) { BaseVibration = 2.0, BearingRise = 32, HydNominalPressure = 120, HydFullTemp = 48, FilterDpClean = 0.25 };
+            _cmCasePacker = new ConditionMonitor(ctx){ BaseVibration = 2.0, BearingRise = 32, HydNominalPressure = 120, HydFullTemp = 48, FilterDpClean = 0.25 }
+                .Identify("EQ-MUC-CP601", "Case Packer CP-601", "Packaging", "CP_601_VIB");
             _cmCasePacker.SeedHours(300);
-            _cmPalletizer = new ConditionMonitor(ctx) { BaseVibration = 2.4, BearingRise = 35, HydNominalPressure = 140, HydFullTemp = 52, FilterDpClean = 0.30 };
+            _cmPalletizer = new ConditionMonitor(ctx){ BaseVibration = 2.4, BearingRise = 35, HydNominalPressure = 140, HydFullTemp = 52, FilterDpClean = 0.30 }
+                .Identify("EQ-MUC-PAL601", "Palletizer PAL-601", "Packaging", "PAL_601_VIB");
             _cmPalletizer.SeedHours(450);
         }
 
@@ -167,6 +173,10 @@ namespace BatchPlant.Process
             t.Write("XRAY_601_TOTAL", _xrayTotal);
             t.Write("XRAY_601_REJECT", _xrayReject);
             t.Write("XRAY_601_STATUS", stationStatus);
+            // The inspector head has no moving part worth monitoring; its infeed conveyor does.
+            _cmXray.Update(stationStatus == 1, 0.4, false, dt.TotalSeconds);
+            _cmXray.Publish(t, vibration: "XRAY_601_VIB", bearingTemp: "XRAY_601_BRGTEMP",
+                mcsa: "XRAY_601_MCSA", failureCount: "XRAY_601_FAILCNT");
 
             // Metal Detector
             t.Write("MD_601_TRIP", mdTripActive);

@@ -46,6 +46,11 @@ namespace BatchPlant.Equipment
         public double WearHours { get; set; } = 5000.0;
 
         // ---- Accumulated state ----
+        // Bearing temperature is the only signal held as state across ticks (a first-order lag);
+        // vibration and MCSA are recomputed from scratch each tick. An injected uplift must
+        // therefore be applied to a COPY, never to the state, or every tick re-inflates the
+        // previous tick's inflated value and the reading diverges exponentially.
+        private double _brgState;
         private double _wearHrs;
         private double _oilHrs;
         private double _filterHrs;
@@ -61,10 +66,59 @@ namespace BatchPlant.Equipment
         public double FilterDp { get; private set; }
         public double OilQuality { get; private set; } = 100.0;
 
+        // ---- Identity (optional; set via Identify to become addressable by the API) ----
+        public string AssetId { get; private set; } = "";
+        public string AssetName { get; private set; } = "";
+        public string Area { get; private set; } = "";
+        public string VibrationTag { get; private set; } = "";
+
+        /// <summary>Vibration this asset WOULD show with no injected fault, mm/s RMS.</summary>
+        public double HealthyVibration { get; private set; }
+
+        private VibrationAnomaly? _anomaly;
+
+        /// <summary>The fault currently injected, or null when the asset is behaving.</summary>
+        public VibrationAnomaly? Anomaly => _anomaly;
+
+        /// <summary>Multiplier the injected fault is applying right now. 1.0 when healthy.</summary>
+        public double AnomalyFactor { get; private set; } = 1.0;
+
+        /// <summary>
+        /// Declare who this monitor belongs to and publish it to the plant registry, which is
+        /// what makes the asset selectable in the operator UI. Assets with no meaningful
+        /// rotating part simply never call this.
+        /// </summary>
+        public ConditionMonitor Identify(string assetId, string assetName, string area, string vibrationTag = "")
+        {
+            AssetId = assetId;
+            AssetName = assetName;
+            Area = area;
+            VibrationTag = vibrationTag;
+            _ctx.ConditionMonitors.Add(this);
+            return this;
+        }
+
+        /// <summary>
+        /// Inject a vibration fault. Replaces any fault already running on this asset, so a
+        /// second request is a re-aim rather than a stacked multiplier -- two 3x injections
+        /// give 3x, not 9x, which is what an operator pressing the button twice expects.
+        /// </summary>
+        public void InjectAnomaly(VibrationAnomaly anomaly) => _anomaly = anomaly;
+
+        /// <summary>Clear any injected fault. Returns true if there was one to clear.</summary>
+        public bool ClearAnomaly()
+        {
+            bool had = _anomaly != null;
+            _anomaly = null;
+            AnomalyFactor = 1.0;
+            return had;
+        }
+
         public ConditionMonitor(PlantContext ctx)
         {
             _ctx = ctx;
             BearingTemp = Ambient;
+            _brgState = Ambient;
             HydraulicTemp = Ambient;
             FilterDp = FilterDpClean;
         }
@@ -125,8 +179,9 @@ namespace BatchPlant.Equipment
                 // Bearing temperature: first-order approach to a load/wear dependent target.
                 double brgTarget = Ambient + BearingRise * (0.3 + 0.7 * lf) * (0.95 + 0.05 * wearFactor);
                 if (faulted) brgTarget += 15.0;
-                BearingTemp += (brgTarget - BearingTemp) * Math.Min(1.0, dtSec * 0.02);
-                BearingTemp = _ctx.AddNoise(BearingTemp, 0.2);
+                _brgState += (brgTarget - _brgState) * Math.Min(1.0, dtSec * 0.02);
+                _brgState = _ctx.AddNoise(_brgState, 0.2);
+                BearingTemp = _brgState;
 
                 // Motor current signature analysis anomaly index (0-100%). Baseline low,
                 // rises with mechanical wear and any fault (broken bar/eccentricity proxy).
@@ -143,8 +198,9 @@ namespace BatchPlant.Equipment
             else
             {
                 Vibration = Math.Max(0, _ctx.AddNoise(0.05, 0.02));
-                BearingTemp += (Ambient - BearingTemp) * Math.Min(1.0, dtSec * 0.01);
-                BearingTemp = _ctx.AddNoise(BearingTemp, 0.1);
+                _brgState += (Ambient - _brgState) * Math.Min(1.0, dtSec * 0.01);
+                _brgState = _ctx.AddNoise(_brgState, 0.1);
+                BearingTemp = _brgState;
                 McsaIndex = Math.Clamp(_ctx.AddNoise(2.0, 0.5), 0, 100);
                 HydraulicPressure = Math.Max(0, _ctx.AddNoise(0.0, 0.5));
                 HydraulicTemp += (Ambient - HydraulicTemp) * Math.Min(1.0, dtSec * 0.005);
@@ -158,6 +214,48 @@ namespace BatchPlant.Equipment
             // Oil quality (%) decays exponentially with oil-in-service hours.
             OilQuality = 100.0 * Math.Exp(-_oilHrs / (OilServiceHours * 1.5));
             OilQuality = Math.Clamp(_ctx.AddNoise(OilQuality, 0.2), 0, 100);
+
+            ApplyAnomaly(running, dtSec);
+        }
+
+        /// <summary>
+        /// Overlay any injected fault on the healthy signals.
+        ///
+        /// Only applied while the asset is RUNNING. A stopped machine does not vibrate, and an
+        /// injected fault that kept shaking a stopped asset would be the first thing to give the
+        /// simulation away -- and would teach a downstream model that vibration is independent
+        /// of run state.
+        ///
+        /// Bearing temperature and the MCSA index move with the injected vibration rather than
+        /// being left at their healthy values. A real mechanical fault shows up in all three, so
+        /// leaving the other two clean would make every injected fault trivially separable from
+        /// a genuine one.
+        /// </summary>
+        private void ApplyAnomaly(bool running, double dtSec)
+        {
+            HealthyVibration = Vibration;
+
+            var a = _anomaly;
+            if (a == null) { AnomalyFactor = 1.0; return; }
+
+            a.ElapsedMinutes += dtSec / 60.0;
+            if (a.Expired) { ClearAnomaly(); return; }
+
+            if (!running) { AnomalyFactor = 1.0; return; }
+
+            double f = a.CurrentFactor(_ctx.Rng);
+            AnomalyFactor = f;
+
+            Vibration = Math.Max(0, Vibration * f);
+
+            // A fault that raises vibration f-fold does not raise bearing temperature f-fold;
+            // the heat rise is real but far smaller. Scale the RISE above ambient, not the
+            // absolute reading, so a cold machine does not jump to an implausible temperature.
+            double rise = _brgState - Ambient;
+            BearingTemp = Ambient + rise * (1.0 + (f - 1.0) * 0.35);
+
+            // Motor current signature distorts with mechanical asymmetry.
+            McsaIndex = Math.Clamp(McsaIndex + (f - 1.0) * 18.0, 0, 100);
         }
 
         /// <summary>

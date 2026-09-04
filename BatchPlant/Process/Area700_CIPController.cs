@@ -73,7 +73,8 @@ namespace BatchPlant.Process
         public Area700_CIPController(PlantContext ctx)
         {
             _ctx = ctx;
-            _cmCipPump = new ConditionMonitor(ctx) { BaseVibration = 1.7, BearingRise = 35 };
+            _cmCipPump = new ConditionMonitor(ctx){ BaseVibration = 1.7, BearingRise = 35 }
+                .Identify("EQ-MUC-CIP-P701", "CIP Pump P-701", "CIP", "CIP_P701_VIB");
             _cmCipPump.SeedHours(150);
         }
 

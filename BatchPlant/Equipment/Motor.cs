@@ -65,6 +65,7 @@ namespace BatchPlant.Equipment
         /// </summary>
         public Motor Bind(MotorTagMap tags)
         {
+            IdentifyIfMonitored(tags.Vibration);
             _tags = tags;
             return this;
         }
@@ -123,7 +124,11 @@ namespace BatchPlant.Equipment
             if (_tags.Torque != null) Ctx.Tags.Write(_tags.Torque, Math.Round(Torque, 2));
             if (_tags.Power != null) Ctx.Tags.Write(_tags.Power, Math.Round(Power, 2));
             if (_tags.Current != null) Ctx.Tags.Write(_tags.Current, Math.Round(Current, 2));
-            if (_tags.Vibration != null) Ctx.Tags.Write(_tags.Vibration, Math.Round(Vibration, 3));
+            // Motor models its own healthy vibration, but injected faults live on the shared
+            // ConditionMonitor. Apply its factor here so an agitator responds to the operator UI
+            // exactly as a pump does, without duplicating the anomaly model.
+            double vib = Vibration * (State == EquipmentState.Running ? Condition.AnomalyFactor : 1.0);
+            if (_tags.Vibration != null) Ctx.Tags.Write(_tags.Vibration, Math.Round(vib, 3));
             if (_tags.Run != null) Ctx.Tags.Write(_tags.Run, State == EquipmentState.Running);
             if (_tags.Fault != null) Ctx.Tags.Write(_tags.Fault, State == EquipmentState.Faulted);
             if (_tags.BearingTemp != null) Ctx.Tags.Write(_tags.BearingTemp, Math.Round(Condition.BearingTemp, 1));

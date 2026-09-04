@@ -448,7 +448,8 @@ namespace BatchPlant.Process
                 _tValveOut = tValveOut;
                 _tAgitRun = tAgitRun;
                 _agitBase = tAgitRun.Replace("_RUN", "");   // e.g. "BT451_AGIT"
-                _cmAgit = new ConditionMonitor(ctx) { BaseVibration = 1.2, BearingRise = 25 };
+                _cmAgit = new ConditionMonitor(ctx) { BaseVibration = 1.2, BearingRise = 25 }
+                    .Identify($"EQ-MUC-{_agitBase.Replace("_AGIT", "")}", $"{name} Agitator", "Processing", $"{_agitBase}_VIB");
 
                 _vessel = new Vessel(ctx, name)
                 {

@@ -48,6 +48,7 @@ namespace BatchPlant.Equipment
 
         public VacuumSystem Bind(VacuumSystemTagMap tags)
         {
+            IdentifyIfMonitored(tags.Vibration);
             _tags = tags;
             return this;
         }

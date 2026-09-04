@@ -83,6 +83,7 @@ namespace BatchPlant.Process
 
             Agitator = new Motor(ctx, "AGIT-301")
             {
+                AssetArea = "Cooking",
                 MaxSpeed = 60,
                 RatedPower = 15,
                 RatedCurrent = 30,

@@ -20,7 +20,7 @@ namespace BatchPlant.Api
     ///   2. MES posts the work order dispatch (the "GO" signal)
     ///   3. BatchManager dequeues the instruction and starts the batch
     /// </summary>
-    public class ApiServer
+    public partial class ApiServer
     {
         private readonly Dictionary<string, JsonObject> _recipes = new();
         private readonly WorkOrderQueue _queue;
@@ -56,6 +56,7 @@ namespace BatchPlant.Api
         {
             app.MapPost("/api/control-recipe", HandleControlRecipe);
             app.MapPost("/api/work-order", HandleWorkOrder);
+            MapVibrationEndpoints(app);
             app.MapGet("/api/status", HandleStatus);
             app.MapGet("/api/recipes", HandleListRecipes);
             app.MapGet("/api/work-order/activated", HandleGetActivated);

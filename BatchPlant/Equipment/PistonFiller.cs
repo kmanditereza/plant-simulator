@@ -89,6 +89,7 @@ namespace BatchPlant.Equipment
 
         public PistonFiller Bind(PistonFillerTagMap tags)
         {
+            IdentifyIfMonitored(tags.Vibration);
             _tags = tags;
             return this;
         }

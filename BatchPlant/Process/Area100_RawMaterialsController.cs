@@ -25,6 +25,7 @@ namespace BatchPlant.Process
 
         // Condition monitoring for screw-feeder drives
         private readonly ConditionMonitor _cmSugarFeeder;
+        private readonly ConditionMonitor _cmSpiceFeeder;
         private readonly ConditionMonitor _cmSaltFeeder;
 
         public int Priority => 35; // slightly before Area 200 so draw activity is visible same tick
@@ -62,6 +63,7 @@ namespace BatchPlant.Process
 
             _p101 = new Pump(ctx, "P-101")
             {
+                AssetArea = "RawMaterials",
                 NominalFlow = 80,  // kg/min at 100% (matches paste dosing rate in Area 200)
                 NominalPressure = 4.0,
                 RatedCurrent = 18,
@@ -81,6 +83,7 @@ namespace BatchPlant.Process
 
             _p102 = new Pump(ctx, "P-102")
             {
+                AssetArea = "RawMaterials",
                 NominalFlow = 80,
                 NominalPressure = 4.0,
                 RatedCurrent = 18,
@@ -96,8 +99,12 @@ namespace BatchPlant.Process
                 Mcsa = "P102_MCSA"
             });
 
-            _cmSugarFeeder = new ConditionMonitor(_ctx) { BaseVibration = 1.0, BearingRise = 22 };
-            _cmSaltFeeder = new ConditionMonitor(_ctx) { BaseVibration = 1.0, BearingRise = 22 };
+            _cmSugarFeeder = new ConditionMonitor(_ctx){ BaseVibration = 1.0, BearingRise = 22 }
+                .Identify("EQ-MUC-SI101", "Sugar Silo Feeder", "RawMaterials", "SUGAR_FEEDER_VIB");
+            _cmSaltFeeder = new ConditionMonitor(_ctx){ BaseVibration = 1.0, BearingRise = 22 }
+                .Identify("EQ-MUC-BN101", "Salt Bin Feeder", "RawMaterials", "SALT_FEEDER_VIB");
+            _cmSpiceFeeder = new ConditionMonitor(_ctx){ BaseVibration = 0.9, BearingRise = 20 }
+                .Identify("EQ-MUC-HP101", "Spice Hopper Feeder", "RawMaterials", "SPICE_FEEDER_VIB");
         }
 
         // ---- Public draw API called by Area 200 each tick while its intake valves are open ----
@@ -242,6 +249,11 @@ namespace BatchPlant.Process
 
             t.Write("SPICE_BIN_WT", Math.Round(_spiceKg, 1));
             t.Write("SPICE_FEEDER_RUN", _spiceDrawTailSec > 0);
+            // Spice dosing feeder: same screw-feeder duty as the sugar and salt feeders, so it
+            // gets the same condition model rather than being the one feeder with no sensor.
+            _cmSpiceFeeder.Update(_spiceDrawTailSec > 0, 0.5, false, dt.TotalSeconds);
+            _cmSpiceFeeder.Publish(t, vibration: "SPICE_FEEDER_VIB", bearingTemp: "SPICE_FEEDER_BRGTEMP",
+                mcsa: "SPICE_FEEDER_MCSA", failureCount: "SPICE_FEEDER_FAILCNT");
 
             t.Write("H2O_FLOW", Math.Round(_waterDrawRateLpm, 1));
             t.Write("H2O_PRESS", Math.Round(_ctx.AddNoise(4.2, 0.05), 2));

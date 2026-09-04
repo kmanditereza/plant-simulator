@@ -66,6 +66,7 @@ namespace BatchPlant.Equipment
 
         public Homogenizer Bind(HomogenizerTagMap tags)
         {
+            IdentifyIfMonitored(tags.Vibration);
             _tags = tags;
             return this;
         }

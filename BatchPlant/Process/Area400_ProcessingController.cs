@@ -71,6 +71,7 @@ namespace BatchPlant.Process
 
             VacuumPump = new VacuumSystem(ctx, "401-VP-001")
             {
+                AssetArea = "Processing",
                 VacuumSetpoint = VacuumTargetMmHg,
                 MaxVacuum = 740,
                 PumpDownRate = 20,
@@ -90,6 +91,7 @@ namespace BatchPlant.Process
 
             TransferPump = new Pump(ctx, "401-P-001")
             {
+                AssetArea = "Processing",
                 NominalFlow = HomogFlowLpm,
                 NominalPressure = 3.5,
                 RatedCurrent = 12,
@@ -107,6 +109,7 @@ namespace BatchPlant.Process
 
             HomogenizerUnit = new Homogenizer(ctx, "HG-401")
             {
+                AssetArea = "Processing",
                 PressureSetpoint = HomogTargetBar,
                 MaxPressure = 250,
                 Stage2Fraction = 0.25,

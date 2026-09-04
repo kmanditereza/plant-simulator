@@ -177,6 +177,7 @@ namespace BatchPlant
                     apiPort = parsedPort;
 
                 var apiServer = new ApiServer(workOrderQueue, tags, packagingQueue);
+                apiServer.ConnectPlant(ctx);   // exposes the condition monitors to /api/vibration/*
                 batchManager.ConnectApiServer(apiServer);
                 area500.ConnectApiServer(apiServer);
                 downtimeManager.ConnectApiServer(apiServer);

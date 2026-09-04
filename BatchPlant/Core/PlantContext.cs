@@ -12,6 +12,12 @@ namespace BatchPlant.Core
         public TagRegistry Tags { get; }
         public Random Rng { get; }
 
+        /// <summary>
+        /// Index of the condition monitors that have declared an identity, so the API can
+        /// inject a vibration fault into a named asset without knowing which controller owns it.
+        /// </summary>
+        public Equipment.ConditionMonitorRegistry ConditionMonitors { get; } = new();
+
         public PlantContext(SimClock clock, TagRegistry tags, Random? rng = null)
         {
             Clock = clock;

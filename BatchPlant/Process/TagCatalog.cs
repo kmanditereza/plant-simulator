@@ -80,6 +80,11 @@ namespace BatchPlant.Process
             var sh = $"{p}/SpiceHopper";
             tags.Define("SPICE_BIN_WT", BuiltInType.Double, sh, "kg", "Spice Hopper Weight", 450.0);
             tags.Define("SPICE_FEEDER_RUN", BuiltInType.Boolean, sh, description: "Spice Feeder Running");
+            tags.Define("SPICE_FEEDER_VIB", BuiltInType.Double, sh, "mm/s", "Spice Feeder Vibration (RMS)", 0.0);
+            tags.Define("SPICE_FEEDER_BRGTEMP", BuiltInType.Double, sh, "degC", "Spice Feeder Bearing Temperature", 25.0);
+            tags.Define("SPICE_FEEDER_MCSA", BuiltInType.Double, sh, "%", "Spice Feeder Motor Current Signature Index", 0.0);
+            tags.Define("SPICE_FEEDER_FAILCNT", BuiltInType.Int32, sh, description: "Spice Feeder Cumulative Failure Count", initialValue: 0);
+
 
             // Water Supply
             var ws = $"{p}/WaterSupply";
@@ -410,6 +415,11 @@ namespace BatchPlant.Process
             tags.Define("INV_TUNNEL_TEMP_2", BuiltInType.Double, inv, "degC", "Inversion Tunnel Temp Zone 2", 22.0);
             tags.Define("INV_TUNNEL_SPD", BuiltInType.Double, inv, "m/min", "Inversion Tunnel Speed", 0.0);
             tags.Define("INV_TUNNEL_RUN", BuiltInType.Boolean, inv, description: "Inversion Tunnel Running");
+            tags.Define("INV_TUNNEL_VIB", BuiltInType.Double, inv, "mm/s", "Inversion Tunnel Drive Vibration (RMS)", 0.0);
+            tags.Define("INV_TUNNEL_BRGTEMP", BuiltInType.Double, inv, "degC", "Inversion Tunnel Drive Bearing Temperature", 25.0);
+            tags.Define("INV_TUNNEL_MCSA", BuiltInType.Double, inv, "%", "Inversion Tunnel Drive Motor Current Signature Index", 0.0);
+            tags.Define("INV_TUNNEL_FAILCNT", BuiltInType.Int32, inv, description: "Inversion Tunnel Drive Cumulative Failure Count", initialValue: 0);
+
             // PackML state
             tags.Define("INV_TUNNEL_OP_STATE", BuiltInType.Int32, inv, description: "PackML Operational State", initialValue: 1);
             tags.Define("INV_TUNNEL_OP_STATE_TXT", BuiltInType.String, inv, description: "PackML Operational State Text", initialValue: "Idle");
@@ -427,6 +437,11 @@ namespace BatchPlant.Process
             tags.Define("COOL_TUN_SPRAY_FLOW", BuiltInType.Double, cool, "L/min", "Cooling Spray Flow", 0.0);
             tags.Define("COOL_TUN_SPRAY_TEMP", BuiltInType.Double, cool, "degC", "Cooling Spray Water Temp", 8.0);
             tags.Define("COOL_TUN_RUN", BuiltInType.Boolean, cool, description: "Cooling Tunnel Running");
+            tags.Define("COOL_TUN_VIB", BuiltInType.Double, cool, "mm/s", "Cooling Tunnel Drive Vibration (RMS)", 0.0);
+            tags.Define("COOL_TUN_BRGTEMP", BuiltInType.Double, cool, "degC", "Cooling Tunnel Drive Bearing Temperature", 25.0);
+            tags.Define("COOL_TUN_MCSA", BuiltInType.Double, cool, "%", "Cooling Tunnel Drive Motor Current Signature Index", 0.0);
+            tags.Define("COOL_TUN_FAILCNT", BuiltInType.Int32, cool, description: "Cooling Tunnel Drive Cumulative Failure Count", initialValue: 0);
+
             // PackML state
             tags.Define("COOL_TUN_OP_STATE", BuiltInType.Int32, cool, description: "PackML Operational State", initialValue: 1);
             tags.Define("COOL_TUN_OP_STATE_TXT", BuiltInType.String, cool, description: "PackML Operational State Text", initialValue: "Idle");
@@ -501,6 +516,11 @@ namespace BatchPlant.Process
             tags.Define("XRAY_601_TOTAL", BuiltInType.Int32, xr, description: "X-Ray Total Inspected", initialValue: 0);
             tags.Define("XRAY_601_REJECT", BuiltInType.Int32, xr, description: "X-Ray Reject Count", initialValue: 0);
             tags.Define("XRAY_601_STATUS", BuiltInType.Int32, xr, description: "X-Ray Status", initialValue: 0);
+            tags.Define("XRAY_601_VIB", BuiltInType.Double, xr, "mm/s", "X-Ray Conveyor Vibration (RMS)", 0.0);
+            tags.Define("XRAY_601_BRGTEMP", BuiltInType.Double, xr, "degC", "X-Ray Conveyor Bearing Temperature", 25.0);
+            tags.Define("XRAY_601_MCSA", BuiltInType.Double, xr, "%", "X-Ray Conveyor Motor Current Signature Index", 0.0);
+            tags.Define("XRAY_601_FAILCNT", BuiltInType.Int32, xr, description: "X-Ray Conveyor Cumulative Failure Count", initialValue: 0);
+
             // PackML state
             tags.Define("XRAY_601_OP_STATE", BuiltInType.Int32, xr, description: "PackML Operational State", initialValue: 1);
             tags.Define("XRAY_601_OP_STATE_TXT", BuiltInType.String, xr, description: "PackML Operational State Text", initialValue: "Idle");
@@ -610,6 +630,11 @@ namespace BatchPlant.Process
             tags.Define("STM_FLOW", BuiltInType.Double, stm, "kg/h", "Total Steam Flow", 0.0);
             tags.Define("STM_COND_TEMP", BuiltInType.Double, stm, "degC", "Condensate Return Temperature", 80.0);
             tags.Define("BOILER_STS", BuiltInType.Int32, stm, description: "Boiler Status (0=Off,1=On,2=Fault)", initialValue: 1);
+            tags.Define("BOILER_FW_PUMP_VIB", BuiltInType.Double, stm, "mm/s", "Boiler Feedwater Pump Vibration (RMS)", 0.0);
+            tags.Define("BOILER_FW_PUMP_BRGTEMP", BuiltInType.Double, stm, "degC", "Boiler Feedwater Pump Bearing Temperature", 25.0);
+            tags.Define("BOILER_FW_PUMP_MCSA", BuiltInType.Double, stm, "%", "Boiler Feedwater Pump Motor Current Signature Index", 0.0);
+            tags.Define("BOILER_FW_PUMP_FAILCNT", BuiltInType.Int32, stm, description: "Boiler Feedwater Pump Cumulative Failure Count", initialValue: 0);
+
             tags.Define("BOILER_PRESS", BuiltInType.Double, stm, "bar", "Boiler Pressure", 7.0);
             tags.Define("BOILER_FWATER_TEMP", BuiltInType.Double, stm, "degC", "Boiler Feedwater Temperature", 60.0);
             tags.Define("BOILER_EFF", BuiltInType.Double, stm, "%", "Boiler Efficiency", 92.0);

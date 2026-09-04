@@ -53,6 +53,7 @@ namespace BatchPlant.Equipment
 
         public Pump Bind(PumpTagMap tags)
         {
+            IdentifyIfMonitored(tags.Vibration);
             _tags = tags;
             return this;
         }

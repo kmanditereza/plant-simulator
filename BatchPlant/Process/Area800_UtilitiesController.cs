@@ -44,6 +44,7 @@ namespace BatchPlant.Process
 
         // Condition monitoring for rotating utility assets
         private readonly ConditionMonitor _cmComp;
+        private readonly ConditionMonitor _cmBoilerFwPump;
         private readonly ConditionMonitor _cmPump1;
         private readonly ConditionMonitor _cmPump2;
         private readonly ConditionMonitor _cmFan1;
@@ -55,15 +56,23 @@ namespace BatchPlant.Process
             _ctx = ctx;
 
             // Compressor: continuous duty (seed some hours), lubricated screw + intake filter.
-            _cmComp = new ConditionMonitor(ctx) { BaseVibration = 2.2, BearingRise = 40, OilServiceHours = 2500, FilterDpClean = 0.15, FilterServiceHours = 1200 };
+            _cmComp = new ConditionMonitor(ctx){ BaseVibration = 2.2, BearingRise = 40, OilServiceHours = 2500, FilterDpClean = 0.15, FilterServiceHours = 1200 }
+                .Identify("EQ-MUC-AC801", "Air Compressor AC-801", "Utilities", "COMP_VIB");
             _cmComp.SeedHours(600);
-            _cmPump1 = new ConditionMonitor(ctx) { BaseVibration = 1.8, BearingRise = 35 };
+            _cmPump1 = new ConditionMonitor(ctx){ BaseVibration = 1.8, BearingRise = 35 }
+                .Identify("EQ-MUC-CT801-P1", "Cooling Water Pump 1", "Utilities", "CW_PUMP1_VIB");
             _cmPump1.SeedHours(400);
-            _cmPump2 = new ConditionMonitor(ctx) { BaseVibration = 1.8, BearingRise = 35 };
-            _cmFan1 = new ConditionMonitor(ctx) { BaseVibration = 2.5, BearingRise = 30 };
+            _cmPump2 = new ConditionMonitor(ctx){ BaseVibration = 1.8, BearingRise = 35 }
+                .Identify("EQ-MUC-CT801-P2", "Cooling Water Pump 2", "Utilities", "CW_PUMP2_VIB");
+            _cmFan1 = new ConditionMonitor(ctx){ BaseVibration = 2.5, BearingRise = 30 }
+                .Identify("EQ-MUC-CT801-F1", "Cooling Tower Fan 1", "Utilities", "CW_FAN1_VIB");
             _cmFan1.SeedHours(300);
-            _cmFan2 = new ConditionMonitor(ctx) { BaseVibration = 2.5, BearingRise = 30 };
-            _cmHwPump = new ConditionMonitor(ctx) { BaseVibration = 1.5, BearingRise = 35 };
+            _cmFan2 = new ConditionMonitor(ctx){ BaseVibration = 2.5, BearingRise = 30 }
+                .Identify("EQ-MUC-CT801-F2", "Cooling Tower Fan 2", "Utilities", "CW_FAN2_VIB");
+            _cmHwPump = new ConditionMonitor(ctx){ BaseVibration = 1.5, BearingRise = 35 }
+                .Identify("EQ-MUC-HX801-P", "Hot Water Pump", "Utilities", "HW_PUMP_VIB");
+            _cmBoilerFwPump = new ConditionMonitor(ctx){ BaseVibration = 1.6, BearingRise = 38 }
+                .Identify("EQ-MUC-B801-FWP", "Boiler Feedwater Pump", "Utilities", "BOILER_FW_PUMP_VIB");
             _cmHwPump.SeedHours(200);
         }
 
@@ -175,6 +184,11 @@ namespace BatchPlant.Process
             t.Write("STM_FLOW", Math.Round(_ctx.AddNoise(totalSteam, totalSteam * 0.01), 1));
             t.Write("STM_COND_TEMP", Math.Round(condTemp, 1));
             t.Write("BOILER_STS", 1); // always on
+            // The boiler is a pressure vessel; its feedwater pump is the rotating machine that
+            // actually fails, so that is what carries the sensor.
+            _cmBoilerFwPump.Update(true, 0.7, false, dt.TotalSeconds);
+            _cmBoilerFwPump.Publish(t, vibration: "BOILER_FW_PUMP_VIB", bearingTemp: "BOILER_FW_PUMP_BRGTEMP",
+                mcsa: "BOILER_FW_PUMP_MCSA", failureCount: "BOILER_FW_PUMP_FAILCNT");
             t.Write("BOILER_PRESS", Math.Round(_ctx.AddNoise(SteamHeaderPressureBar + 1.0, 0.04), 2));
             t.Write("BOILER_FWATER_TEMP", Math.Round(fwTemp, 1));
             t.Write("BOILER_EFF", Math.Round(BoilerEfficiency * 100, 1));

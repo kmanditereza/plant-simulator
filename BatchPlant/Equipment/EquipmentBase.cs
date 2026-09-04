@@ -50,6 +50,23 @@ namespace BatchPlant.Equipment
         /// <summary>Vibration (mm/s RMS) at which condition monitoring trips a fault. 0 = disabled.</summary>
         public double VibrationTripLimit { get; set; }
 
+        /// <summary>
+        /// ISA-95 area this asset sits in, used to group it in the operator console.
+        /// Set by the owning controller; blank simply means ungrouped.
+        /// </summary>
+        public string AssetArea { get; set; } = "";
+
+        /// <summary>
+        /// Register this asset as vibration-injectable. Called from Bind, and ONLY when the asset
+        /// actually binds a vibration tag -- a valve or an unmonitored vessel has nothing to shake
+        /// and has no business in the console's asset list.
+        /// </summary>
+        protected void IdentifyIfMonitored(string? vibrationTag)
+        {
+            if (!string.IsNullOrWhiteSpace(vibrationTag))
+                Condition.Identify(TagPrefix, TagPrefix, AssetArea, vibrationTag!);
+        }
+
         /// <summary>Bearing temperature (degC) at which condition monitoring trips a fault. 0 = disabled.</summary>
         public double BearingTempTripLimit { get; set; }
 

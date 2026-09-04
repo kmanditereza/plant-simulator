@@ -90,6 +90,7 @@ namespace BatchPlant.Process
 
             Agitator = new Motor(ctx, "AGIT-201")
             {
+                AssetArea = "PreMix",
                 MaxSpeed = 1500,
                 RatedPower = 75,
                 RatedCurrent = 130,
