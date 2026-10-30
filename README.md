@@ -8,7 +8,7 @@ It runs a plant with raw materials, pre-mix, cooking, deaeration and homogenisat
 - **An HTTP API** to dispatch batches and packaging orders, and to read the ISA-88/ISA-95 events they produce.
 - **A SCADA console** in the browser to watch the plant and inject equipment faults.
 
-Your own MES, scheduler, historian or integration platform (Node-RED, HighByte, Ignition, Kepware, a Python script) can drive it and record what it does.
+Your own MES, scheduler, historian or integration platform can drive it and record what it does.
 
 - [Run it](#run-it)
 - [Interfaces at a glance](#interfaces-at-a-glance)
