@@ -31,8 +31,7 @@ namespace BatchPlant.Api
             app.MapGet("/api/vibration/assets", HandleVibrationAssets);
             app.MapPost("/api/vibration/anomaly", HandleInjectAnomaly);
             app.MapPost("/api/vibration/anomaly/clear", HandleClearAnomaly);
-            app.MapGet("/sim", HandleSimUi);
-            app.MapGet("/", HandleSimUi);
+            app.MapGet("/sim", HandleSimUi);   // "/" is the SCADA overview (ApiServer.Scada.cs)
         }
 
         private static JsonObject Describe(ConditionMonitor c)

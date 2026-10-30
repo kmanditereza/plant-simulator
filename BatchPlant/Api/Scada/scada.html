@@ -1,0 +1,1126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Plant Overview — Munich Line 1</title>
+<!--
+  Plant SCADA overview for the ketchup batch-plant simulator.
+
+  Built to ISA-101 high-performance HMI practice:
+    * grey canvas, neutral equipment — colour is reserved for abnormal conditions, so an alarm
+      is the only saturated thing on the screen and is seen at once;
+    * running vs stopped is shown by FILL (solid dark = running/open, hollow = stopped/closed),
+      not red/green, which colour-blind operators cannot separate and which competes with alarms;
+    * alarm priority is coded three ways — colour, shape and number — never by colour alone;
+    * analog values carry a moving-pointer indicator against their normal band where the band
+      matters, so "is this normal?" is a glance, not a comparison of numbers;
+    * stale data is marked (magenta) the moment the simulator stops answering, so frozen values
+      are never mistaken for live ones.
+
+  Every tag group the simulator publishes is bound to an object on the graphic; clicking an
+  object opens its faceplate with all of its tags. The footer reports coverage, so a tag added
+  to TagCatalog that is NOT drawn shows up as "not on graphic" instead of silently missing.
+
+  Data: GET /api/scada/catalog (once), GET /api/scada/values (1 s), GET /api/vibration/assets (3 s).
+-->
+<style>
+  :root{
+    --bg:#c8cbce; --zone:#d6d9db; --zone-major:#dcdee0; --band:#c1c5c8; --edge:#8d9297;
+    --ink:#16191c; --ink2:#41474d; --muted:#656b71;
+    --equip:#4d5359; --off:#eef0f1; --on:#2f3439; --level:#97abbe; --level-edge:#7d93a8;
+    --pipe:#a5aaaf; --pipe-on:#3a4147; --sel:#1b62b5;
+    --p1:#d12a1c; --p2:#ef8a00; --p3:#e4c100; --stale:#b03ccf;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:13px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,Ubuntu,sans-serif;
+       display:flex;flex-direction:column;overflow:hidden}
+  .num{font-variant-numeric:tabular-nums}
+
+  /* ---- header ---- */
+  header{display:flex;align-items:center;gap:18px;padding:8px 16px;background:#b9bdc1;
+         border-bottom:1px solid var(--edge);flex-wrap:wrap}
+  header h1{margin:0;font-size:15px;font-weight:700;letter-spacing:.04em}
+  header .grp{display:flex;gap:14px;align-items:baseline;color:var(--ink2);flex-wrap:wrap}
+  header .grp b{color:var(--ink);font-weight:600}
+  header .spacer{flex:1}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:3px;
+        border:1px solid var(--edge);background:var(--off);font-weight:600;font-size:12px}
+  .pill.live::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--on)}
+  .pill.lost{background:var(--stale);border-color:var(--stale);color:#fff}
+  .counts{display:flex;gap:6px}
+  .cnt{display:inline-flex;align-items:center;gap:4px;font-weight:700;font-size:12px;padding:1px 6px;
+       border:1px solid var(--edge);border-radius:3px;background:var(--off)}
+  .cnt.zero{opacity:.45}
+  a.link{color:var(--ink2);font-size:12px}
+
+  /* ---- alarm banner ---- */
+  #alarms{background:#e4e6e8;border-bottom:1px solid var(--edge);max-height:84px;overflow:auto}
+  #alarms .row{display:grid;grid-template-columns:26px 50px 96px 1fr;gap:8px;align-items:center;
+               padding:3px 16px;cursor:pointer;border-bottom:1px solid #d0d3d6}
+  #alarms .row:hover{background:#d7dadd}
+  #alarms .none{padding:6px 16px;color:var(--muted)}
+  #alarms .t{color:var(--muted)} #alarms .o{font-weight:700}
+
+  /* ---- canvas + faceplate ---- */
+  main{flex:1;display:flex;min-height:0;position:relative}
+  #wrap{flex:1;overflow:auto;min-width:0}
+  #plant{display:block;width:100%;height:100%;min-width:1100px;min-height:560px}
+  aside[hidden]{display:none!important}
+  aside{width:380px;max-width:92vw;background:#eceef0;border-left:1px solid var(--edge);
+        display:flex;flex-direction:column;min-height:0}
+  aside .hd{padding:10px 14px;border-bottom:1px solid var(--edge);background:#dfe2e4;display:flex;gap:8px}
+  aside .hd h2{margin:0;font-size:15px}
+  aside .hd .sub{color:var(--muted);font-size:12px;word-break:break-word}
+  aside .hd button{margin-left:auto;align-self:flex-start}
+  aside .bd{overflow:auto;padding:8px 14px 16px}
+  aside h3{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:14px 0 6px}
+  aside table{width:100%;border-collapse:collapse;table-layout:fixed}
+  aside td{padding:4px 2px;border-bottom:1px solid #d5d8db;vertical-align:middle}
+  aside td.d{color:var(--ink2);font-size:12px;overflow-wrap:anywhere}
+  aside td.d small{display:block;color:var(--muted);font-size:10.5px;font-family:ui-monospace,Menlo,Consolas,monospace}
+  aside td.v{text-align:right;font-weight:600;width:112px;overflow-wrap:anywhere}
+  aside td.v small{white-space:nowrap}
+  aside td.v small{color:var(--muted);font-weight:400}
+  aside td.sp{width:72px}
+  aside .ab{display:flex;gap:8px;align-items:center;padding:4px 0}
+  aside .inj{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  aside .note{color:var(--muted);font-size:11.5px;margin-top:6px}
+  button,select,input{font:inherit}
+  button{background:#f6f7f8;border:1px solid var(--edge);border-radius:3px;padding:3px 10px;cursor:pointer}
+  button:hover{background:#fff}
+  button.pri{background:var(--on);color:#fff;border-color:var(--on)}
+  select,input[type=number]{background:#fff;border:1px solid var(--edge);border-radius:3px;padding:2px 4px}
+  input[type=number]{width:62px}
+
+  footer{display:flex;gap:18px;align-items:center;padding:5px 16px;background:#b9bdc1;
+         border-top:1px solid var(--edge);font-size:11.5px;color:var(--ink2);flex-wrap:wrap}
+  footer span{display:inline-flex;align-items:center;gap:5px}
+  footer .spacer{flex:1}
+
+  /* ---- SVG ---- */
+  svg text{fill:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",Roboto,Ubuntu,sans-serif}
+  .zone{fill:var(--zone);stroke:var(--edge);stroke-width:1.2}
+  .zone.major{fill:var(--zone-major);stroke:#6e747a;stroke-width:2.4}
+  .band{fill:var(--band)}
+  .zt{font-size:22px;font-weight:800;letter-spacing:.06em}
+  .zt.minor{font-size:16px}
+  .zs{font-size:12.5px;fill:var(--ink2)!important}
+  .kpi{font-size:13.5px;fill:var(--ink)!important}
+  .kpi .k{fill:var(--muted)}
+  .lbl{font-size:13.5px;font-weight:700}
+  .sub{font-size:11.5px;fill:var(--ink2)!important}
+  .vt{font-size:13px} .vt .v{font-weight:600;font-variant-numeric:tabular-nums} .vt .u{fill:var(--muted);font-size:11.5px}
+  .st{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;fill:var(--ink2)!important}
+  .st.abn{fill:#9a5a00!important} .st.flt{fill:var(--p1)!important}
+  .grp-t{font-size:11px;font-weight:700;letter-spacing:.08em;fill:var(--muted)!important}
+
+  .eq{fill:var(--off);stroke:var(--equip);stroke-width:1.6}
+  .eq.on{fill:var(--on)}
+  .eq-glyph{fill:var(--equip);font-size:11px;font-weight:800;letter-spacing:.04em;pointer-events:none}
+  .on-glyph{fill:#f3f4f5}
+  .vessel{fill:#f4f5f6;stroke:none}
+  .jacket{fill:none;stroke:var(--equip);stroke-width:1.2;stroke-dasharray:5 3}
+  .level{fill:var(--level)} .level-top{stroke:var(--level-edge);stroke-width:1.5}
+  .tick{stroke:#9aa0a6;stroke-width:1}
+  .shaft{stroke:var(--equip);stroke-width:2;fill:none}
+  .obj.alarm .eq,.obj.alarm .vessel-edge{stroke:var(--p1);stroke-width:3}
+
+  .pipe{fill:none;stroke:var(--pipe);stroke-width:5;stroke-linejoin:round;stroke-linecap:round}
+  .pipe.on{stroke:var(--pipe-on)}
+  .pipe.util{stroke-width:3}
+  .pipe.dry{stroke-dasharray:10 5}
+  .pipe.steam{stroke-dasharray:14 4 3 4}
+  .pipe.cw,.pipe.hw{stroke-dasharray:9 4}
+  .pipe.cip{stroke-dasharray:3 4}
+  .flow{fill:none;stroke:#e9ecef;stroke-width:2;stroke-dasharray:6 18;opacity:0;stroke-linecap:round}
+  .flow.on{opacity:.85;animation:flow 1.1s linear infinite}
+  .flow.util{stroke-width:1.2}
+  @keyframes flow{to{stroke-dashoffset:-24}}
+
+  .conv{fill:none;stroke:#b4b8bc;stroke-width:16;stroke-linejoin:round}
+  .conv-edge{fill:none;stroke:var(--equip);stroke-width:20;stroke-linejoin:round}
+  .conv-roll{fill:none;stroke:#8e9398;stroke-width:16;stroke-dasharray:2 8}
+  .bottles{fill:none;stroke:var(--on);stroke-width:8;stroke-dasharray:5 15;opacity:0;stroke-linecap:round}
+  .bottles.on{opacity:.9;animation:bottles 1s linear infinite}
+  @keyframes bottles{to{stroke-dashoffset:-20}}
+  @media (prefers-reduced-motion: reduce){.flow.on,.bottles.on{animation:none}}
+
+  .bar-track{fill:#e7e9eb;stroke:#9aa0a6;stroke-width:1}
+  .bar-band{fill:#b8bec4}
+  .bar-ptr{fill:var(--on)}
+  .bar-ptr.alm{fill:var(--p2);stroke:#222;stroke-width:.8}
+
+  .obj{cursor:pointer;outline:none}
+  .obj .hit{fill:transparent;stroke:none}
+  .obj:hover .hit{fill:rgba(27,98,181,.07)}
+  .obj:focus-visible .hit,.obj.sel .hit{stroke:var(--sel);stroke-width:2;stroke-dasharray:6 4;fill:rgba(27,98,181,.06)}
+  .bad .v{fill:var(--stale)!important}
+  svg.stale .vt .v,svg.stale .kpi{fill:var(--stale)!important}
+  svg.stale .flow.on,svg.stale .bottles.on{animation:none}
+  .amk text{font-size:11px;font-weight:800;fill:#111!important}
+  .amk.p1 text{fill:#fff!important}
+</style>
+</head>
+<body>
+<header>
+  <h1>MUNICH PLANT · LINE 1 · PLANT OVERVIEW</h1>
+  <div class="grp">
+    <span>Mode <b id="h-mode">—</b></span>
+    <span>Shift <b id="h-shift" class="num">—</b></span>
+    <span>Plant time <b id="h-time" class="num">—</b></span>
+    <span>Sim <b id="h-speed" class="num">—</b></span>
+  </div>
+  <span class="spacer"></span>
+  <div class="counts" title="Active abnormal conditions by priority">
+    <span class="cnt zero" id="c1"></span><span class="cnt zero" id="c2"></span><span class="cnt zero" id="c3"></span>
+  </div>
+  <span class="pill" id="comms">connecting…</span>
+  <a class="link" href="/sim" title="The previous vibration-only console">vibration console</a>
+</header>
+<section id="alarms" aria-label="Abnormal conditions" aria-live="polite"><div class="none">Waiting for data…</div></section>
+<main>
+  <div id="wrap">
+    <svg id="plant" viewBox="0 0 2300 1160" preserveAspectRatio="xMidYMid meet" role="img"
+         aria-label="Process overview of the plant: raw materials, production area, packaging area, utilities">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#5c6267"/>
+        </marker>
+      </defs>
+      <g id="L-zones"></g><g id="L-pipes"></g><g id="L-obj"></g><g id="L-alm"></g>
+    </svg>
+  </div>
+  <aside id="fp" hidden aria-label="Faceplate">
+    <div class="hd"><div><h2 id="fp-t"></h2><div class="sub" id="fp-s"></div></div>
+      <button id="fp-x" aria-label="Close faceplate">✕</button></div>
+    <div class="bd" id="fp-b"></div>
+  </aside>
+</main>
+<footer>
+  <span><svg width="16" height="16"><circle cx="8" cy="8" r="6" fill="#2f3439" stroke="#4d5359"/></svg> running / open</span>
+  <span><svg width="16" height="16"><circle cx="8" cy="8" r="6" fill="#eef0f1" stroke="#4d5359"/></svg> stopped / closed</span>
+  <span><svg width="30" height="10"><path d="M2 5H28" stroke="#3a4147" stroke-width="5"/></svg> flowing</span>
+  <span><svg width="30" height="10"><path d="M2 5H28" stroke="#a5aaaf" stroke-width="5"/></svg> no flow</span>
+  <span id="lg-alm"></span>
+  <span style="color:#b03ccf;font-weight:600">magenta = stale / bad data</span>
+  <span class="spacer"></span>
+  <span id="coverage" class="num">—</span>
+</footer>
+
+<script>
+'use strict';
+/* =====================================================================================
+   State
+   ===================================================================================== */
+const NS = 'http://www.w3.org/2000/svg';
+const $ = s => document.querySelector(s);
+const S = { cat:{}, catList:[], v:{}, hist:{}, vib:{}, plantTime:null, lastOk:0, sel:null, alarms:new Map() };
+const U = [];        // per-poll updaters
+const OBJ = {};      // id -> object descriptor
+const PIPES = [];
+const HIST_LEN = 120;
+const L = { zones:$('#L-zones'), pipes:$('#L-pipes'), obj:$('#L-obj'), alm:$('#L-alm') };
+
+/* ---- value access ---- */
+const raw = t => S.v[t];
+const num = t => { const x = S.v[t]; return typeof x === 'number' && isFinite(x) ? x : null; };
+const on  = t => { const x = S.v[t]; return x === true || x === 1; };
+const fmt = (x, d = 1) => x == null ? '—'
+  : Number(x).toLocaleString('en-US', { minimumFractionDigits:d, maximumFractionDigits:d });
+const UNIT = { degC:'°C', 'm3/h':'m³/h', 'Nm3/h':'Nm³/h', 'uS/cm':'µS/cm', RPM:'rpm' };
+const unitOf = t => { const u = S.cat[t]?.unit; return u ? (UNIT[u] || u) : ''; };
+const PACKML = ['Disabled', 'Idle', 'Running', 'Starved', 'Blocked', 'Planned DT', 'Unplanned DT', 'Other'];
+// Cycle states as the controllers' CycleState enums define them.
+const MX_STATE = ['Idle', 'Filling water', 'Dosing paste', 'Dosing vinegar', 'Ramping agitator', 'Mixing', 'Ramping down', 'Discharging'];
+const KT_STATE = ['Idle', 'Filling', 'Heating up', 'Holding', 'Cooling', 'Discharging'];
+const DA_STATE = ['Idle', 'Filling', 'Pulling vacuum', 'Deaerating', 'Homogenizing', 'Venting vacuum', 'Draining'];
+const BT_STATE = ['Empty', 'Filling', 'Ready', 'Draining', 'Disposing'];
+const CIP_STEP = ['Idle', 'Pre-rinse', 'Caustic wash', 'Intermediate rinse', 'Acid wash', 'Final rinse', 'Sanitize', 'Drain'];
+
+/* =====================================================================================
+   SVG helpers
+   ===================================================================================== */
+function el(tag, a, p) {
+  const e = document.createElementNS(NS, tag);
+  if (a) for (const k in a) if (a[k] != null) e.setAttribute(k, a[k]);
+  if (p) p.appendChild(e);
+  return e;
+}
+function tx(p, x, y, s, cls, anchor) {
+  const t = el('text', { x, y, class:cls, 'text-anchor':anchor || 'middle' }, p);
+  t.textContent = s; return t;
+}
+
+/* An interactive object: a group that opens its faceplate. Its faceplate lists every tag in
+   `folders` (exact folder match), narrowed by `filter` when several objects share a folder.
+   (ax, ay) is where its alarm marker is drawn. */
+function obj(id, o) {
+  const g = el('g', { class:'obj', 'data-id':id, tabindex:0, role:'button', 'aria-label':`${id} ${o.name}` }, L.obj);
+  g.addEventListener('click', e => { e.stopPropagation(); select(id); });
+  g.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(id); } });
+  el('title', {}, g).textContent = `${id} · ${o.name} — click for faceplate`;
+  OBJ[id] = { id, ...o, g };
+  return g;
+}
+
+/* Text with an optional label, a live value and a unit. fn() overrides the tag read. */
+function vt(p, x, y, o) {
+  const t = el('text', { x, y, class:'vt', 'text-anchor':o.anchor || 'start' }, p);
+  if (o.lab) { const l = el('tspan', { class:'u' }, t); l.textContent = o.lab + ' '; }
+  const v = el('tspan', { class:'v' }, t);
+  const u = el('tspan', { class:'u' }, t);
+  const unit = o.u ?? (o.tag ? unitOf(o.tag) : '');
+  if (unit) u.textContent = ' ' + unit;
+  U.push(() => {
+    const x = o.fn ? o.fn() : num(o.tag);
+    if (x == null) { t.classList.add('bad'); v.textContent = '?'; return; }
+    t.classList.remove('bad');
+    v.textContent = typeof x === 'string' ? x : fmt(x, o.d ?? 1);
+  });
+  return t;
+}
+
+/* Status text under equipment. fn() returns [text, level] with level '', 'abn' or 'flt'. */
+function st(p, x, y, fn, anchor) {
+  const t = el('text', { x, y, class:'st', 'text-anchor':anchor || 'middle' }, p);
+  U.push(() => { const [s, lvl] = fn(); t.textContent = s; t.setAttribute('class', 'st ' + (lvl || '')); });
+  return t;
+}
+const packml = pref => () => {
+  const s = num(pref + '_OP_STATE');
+  const txt = raw(pref + '_OP_STATE_TXT') || PACKML[s] || '—';
+  return [txt, s >= 3 && s !== 5 ? 'abn' : ''];
+};
+
+/* ISA-101 moving-pointer analog indicator: track, normal band, pointer. The pointer turns
+   to the P2 colour only when the value is outside the band AND the band applies (when()). */
+function hbar(p, x, y, w, o) {
+  el('rect', { x, y, width:w, height:6, class:'bar-track' }, p);
+  const span = o.max - o.min, px = v => x + Math.max(0, Math.min(1, (v - o.min) / span)) * w;
+  if (o.lo != null && o.hi != null)
+    el('rect', { x:px(o.lo), y:y + 1, width:px(o.hi) - px(o.lo), height:4, class:'bar-band' }, p);
+  const ptr = el('path', { class:'bar-ptr' }, p);
+  U.push(() => {
+    const v = o.fn ? o.fn() : num(o.tag);
+    if (v == null) { ptr.setAttribute('d', ''); return; }
+    const cx = px(v);
+    ptr.setAttribute('d', `M${cx},${y + 7} l-5,8 h10 z`);
+    const applies = o.when ? o.when() : true;
+    ptr.setAttribute('class', 'bar-ptr' + (applies && ((o.lo != null && v < o.lo) || (o.hi != null && v > o.hi)) ? ' alm' : ''));
+  });
+}
+
+/* ---- equipment symbols ---- */
+let clipN = 0;
+function vessel(g, o) {          // o: x,y,w,h, pct(): 0..100, cone (px), jacket
+  const { x, y, w, h } = o, id = 'clip' + (++clipN);
+  let d;
+  if (o.cone) {
+    const c = o.cone, r = 10;
+    d = `M${x},${y + r} Q${x},${y} ${x + r},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + h - c} L${x + w / 2 + 9},${y + h} H${x + w / 2 - 9} L${x},${y + h - c} Z`;
+  } else {
+    const ry = Math.min(14, h * 0.09);
+    d = `M${x},${y + ry} Q${x},${y} ${x + w / 2},${y} Q${x + w},${y} ${x + w},${y + ry} V${y + h - ry} Q${x + w},${y + h} ${x + w / 2},${y + h} Q${x},${y + h} ${x},${y + h - ry} Z`;
+  }
+  if (o.jacket) el('path', { d:`M${x - 6},${y + h * 0.28} V${y + h - 4} Q${x - 6},${y + h + 6} ${x + w / 2},${y + h + 6} Q${x + w + 6},${y + h + 6} ${x + w + 6},${y + h - 4} V${y + h * 0.28}`, class:'jacket' }, g);
+  const cp = el('clipPath', { id }, g); el('path', { d }, cp);
+  el('path', { d, class:'vessel' }, g);
+  const fill = el('rect', { x, width:w, class:'level', 'clip-path':`url(#${id})` }, g);
+  const top = el('line', { x1:x, x2:x + w, class:'level-top', 'clip-path':`url(#${id})` }, g);
+  el('path', { d, fill:'none', stroke:'#4d5359', 'stroke-width':1.8, class:'vessel-edge' }, g);
+  if (h > 60) for (const f of [0.25, 0.5, 0.75]) {
+    const ty = y + h - f * h;
+    el('line', { x1:x + w - 7, x2:x + w, y1:ty, y2:ty, class:'tick' }, g);
+  }
+  U.push(() => {
+    const p = o.pct();
+    if (p == null) { fill.setAttribute('height', 0); top.style.display = 'none'; return; }
+    const hh = Math.max(0, Math.min(1, p / 100)) * h, yy = y + h - hh;
+    fill.setAttribute('y', yy); fill.setAttribute('height', hh);
+    top.setAttribute('y1', yy); top.setAttribute('y2', yy);
+    top.style.display = p > 0.5 ? '' : 'none';
+  });
+}
+function motor(g, cx, cy, runFn, r = 9) {           // agitator / drive motor
+  const c = el('circle', { cx, cy, r, class:'eq' }, g);
+  const t = tx(g, cx, cy + 4, 'M', 'eq-glyph');
+  U.push(() => { const on_ = runFn(); c.classList.toggle('on', on_); t.classList.toggle('on-glyph', on_); });
+}
+function agitator(g, cx, top, depth, runFn) {
+  el('line', { x1:cx, y1:top - 8, x2:cx, y2:top + depth, class:'shaft' }, g);
+  el('path', { d:`M${cx - 14},${top + depth} h28 M${cx - 10},${top + depth - 10} h20`, class:'shaft' }, g);
+  motor(g, cx, top - 16, runFn);
+}
+function pump(g, cx, cy, runFn, r = 12) {           // centrifugal pump, discharge to the right
+  const body = el('circle', { cx, cy, r, class:'eq' }, g);
+  const tri = el('path', { d:`M${cx - 5},${cy - 6} L${cx + 6},${cy} L${cx - 5},${cy + 6} Z`, fill:'#4d5359' }, g);
+  U.push(() => { const on_ = runFn(); body.classList.toggle('on', on_); tri.setAttribute('fill', on_ ? '#eef0f1' : '#4d5359'); });
+}
+function valve(g, cx, cy, openFn, vertical, modulating) {   // bow-tie; filled = open
+  const s = 8;
+  const d = vertical
+    ? `M${cx - s},${cy - s} L${cx + s},${cy - s} L${cx - s},${cy + s} L${cx + s},${cy + s} Z`
+    : `M${cx - s},${cy - s} L${cx + s},${cy + s} L${cx + s},${cy - s} L${cx - s},${cy + s} Z`;
+  if (modulating) {
+    const ax = vertical ? cx + 16 : cx, ay = vertical ? cy : cy - 16;
+    el('line', { x1:cx, y1:cy, x2:ax, y2:ay, class:'shaft' }, g);
+    el('path', { d:vertical ? `M${ax},${ay - 8} A8,8 0 0 1 ${ax},${ay + 8} Z` : `M${ax - 8},${ay} A8,8 0 0 1 ${ax + 8},${ay} Z`, class:'eq' }, g);
+  }
+  const p = el('path', { d, class:'eq', 'stroke-linejoin':'round' }, g);
+  U.push(() => p.classList.toggle('on', !!openFn()));
+}
+function feeder(g, x, y, w, runFn) {                 // screw feeder with drive
+  const r = el('rect', { x, y, width:w, height:16, rx:3, class:'eq' }, g);
+  const scr = el('path', { d:Array.from({ length:Math.floor(w / 9) }, (_, i) => `M${x + 5 + i * 9},${y + 13} l6,-10`).join(' '),
+                           stroke:'#4d5359', 'stroke-width':1.4, fill:'none' }, g);
+  motor(g, x + w + 12, y + 8, runFn, 8);
+  U.push(() => { const on_ = runFn(); r.classList.toggle('on', on_); scr.setAttribute('stroke', on_ ? '#eef0f1' : '#4d5359'); });
+}
+function box(g, x, y, w, h, glyph, runFn) {          // packaging machine
+  const r = el('rect', { x, y, width:w, height:h, rx:4, class:'eq' }, g);
+  const t = tx(g, x + w / 2, y + h / 2 + 4, glyph, 'eq-glyph');
+  U.push(() => { const on_ = runFn(); r.classList.toggle('on', on_); t.classList.toggle('on-glyph', on_); });
+}
+function rotary(g, cx, cy, r, heads, glyph, runFn) { // rotary filler / capper
+  const c = el('circle', { cx, cy, r, class:'eq' }, g);
+  el('circle', { cx, cy, r:r * 0.55, fill:'none', stroke:'#9aa0a6', 'stroke-width':1 }, g);
+  const hs = [];
+  for (let i = 0; i < heads; i++) {
+    const a = i / heads * Math.PI * 2;
+    hs.push(el('circle', { cx:cx + Math.cos(a) * r * 0.78, cy:cy + Math.sin(a) * r * 0.78, r:Math.max(2.5, r * 0.09), fill:'#4d5359' }, g));
+  }
+  const t = tx(g, cx, cy + 4, glyph, 'eq-glyph');
+  U.push(() => { const on_ = runFn(); c.classList.toggle('on', on_); t.classList.toggle('on-glyph', on_);
+                 hs.forEach(h => h.setAttribute('fill', on_ ? '#eef0f1' : '#4d5359')); });
+}
+function tunnel(g, x, y, w, h, zones, glyph, runFn) {
+  const r = el('rect', { x, y, width:w, height:h, rx:4, class:'eq' }, g);
+  for (let i = 1; i < zones; i++) el('line', { x1:x + w / zones * i, x2:x + w / zones * i, y1:y + 4, y2:y + h - 4, stroke:'#9aa0a6', 'stroke-dasharray':'3 3' }, g);
+  const t = tx(g, x + w / 2, y + h / 2 + 4, glyph, 'eq-glyph');
+  U.push(() => { const on_ = runFn(); r.classList.toggle('on', on_); t.classList.toggle('on-glyph', on_); });
+}
+function hx(g, cx, cy, r, runFn) {                   // heat exchanger
+  const c = el('circle', { cx, cy, r, class:'eq' }, g);
+  const z = el('path', { d:`M${cx - r},${cy} l8,-9 l8,18 l8,-18 l8,18 l8,-9`, fill:'none', stroke:'#4d5359', 'stroke-width':1.6 }, g);
+  U.push(() => { const on_ = runFn(); c.classList.toggle('on', on_); z.setAttribute('stroke', on_ ? '#eef0f1' : '#4d5359'); });
+}
+function fan(g, cx, cy, runFn) {
+  const c = el('circle', { cx, cy, r:14, class:'eq' }, g);
+  const bl = el('path', { d:`M${cx - 10},${cy} H${cx + 10} M${cx},${cy - 10} V${cy + 10}`, stroke:'#4d5359', 'stroke-width':2 }, g);
+  U.push(() => { const on_ = runFn(); c.classList.toggle('on', on_); bl.setAttribute('stroke', on_ ? '#eef0f1' : '#4d5359'); });
+}
+
+/* ---- pipes ---- */
+function pipe(d, kind, active, opts = {}) {
+  const util = ['steam', 'cw', 'hw', 'cip'].includes(kind);
+  const base = el('path', { d, class:`pipe ${kind}${util ? ' util' : ''}`, 'marker-end':opts.end ? 'url(#arr)' : null }, L.pipes);
+  const flow = el('path', { d, class:`flow${util ? ' util' : ''}` }, L.pipes);
+  PIPES.push({ base, flow, active });
+}
+function pipeLabel(x, y, s, anchor) { tx(L.pipes, x, y, s, 'grp-t', anchor || 'start'); }
+function conveyor(d, runFn) {
+  el('path', { d, class:'conv-edge' }, L.pipes);
+  el('path', { d, class:'conv' }, L.pipes);
+  el('path', { d, class:'conv-roll' }, L.pipes);
+  const b = el('path', { d, class:'bottles' }, L.pipes);
+  U.push(() => b.classList.toggle('on', !!runFn()));
+}
+function arrow(x, y, label) {
+  el('path', { d:`M${x + 18},${y} H${x - 8}`, stroke:'#5c6267', 'stroke-width':3, 'marker-end':'url(#arr)' }, L.pipes);
+  tx(L.pipes, x - 18, y - 16, label, 'grp-t', 'start');
+}
+
+/* ---- zones & panels ---- */
+function zone(x, y, w, h, title, subtitle, major, kpiFn) {
+  el('rect', { x, y, width:w, height:h, rx:6, class:'zone' + (major ? ' major' : '') }, L.zones);
+  const bandH = major ? 66 : 50;
+  el('rect', { x:x + 1.2, y:y + 1.2, width:w - 2.4, height:bandH, rx:5, class:'band' }, L.zones);
+  const t = tx(L.zones, x + 16, y + (major ? 30 : 23), title, 'zt' + (major ? '' : ' minor'), 'start');
+  tx(L.zones, x + 30 + t.getComputedTextLength(), y + (major ? 30 : 23), subtitle, 'zs', 'start');
+  if (kpiFn) {
+    const k = el('text', { x:x + 16, y:y + (major ? 54 : 42), class:'kpi', 'text-anchor':'start' }, L.zones);
+    U.push(() => {
+      k.textContent = '';
+      for (const [lab, val] of kpiFn()) {
+        el('tspan', { class:'k' }, k).textContent = lab + ' ';
+        el('tspan', {}, k).textContent = val + '     ';
+      }
+    });
+  }
+}
+function bandObj(id, x, y, w, h, name, folders, area, ax, ay) {
+  const g = obj(id, { name, area, folders, ax, ay });
+  el('rect', { x, y, width:w, height:h, class:'hit' }, g);
+  return g;
+}
+function pidBlock(g, x, y, tagName, pre, withMode) {
+  el('rect', { x, y:y - 16, width:122, height:withMode ? 84 : 68, rx:3, fill:'#e9ebed', stroke:'#9aa0a6' }, g);
+  tx(g, x + 6, y, tagName, 'lbl', 'start');
+  vt(g, x + 6, y + 18, { tag:pre + '_SP', lab:'SP' });
+  vt(g, x + 6, y + 34, { tag:pre + '_PV', lab:'PV' });
+  vt(g, x + 6, y + 50, { tag:pre + '_OP', lab:'OP', d:0 });
+  if (withMode) st(g, x + 6, y + 64, () => [num(pre + '_MODE') === 1 ? 'Auto' : 'Manual', num(pre + '_MODE') === 1 ? '' : 'abn'], 'start');
+}
+function progressPanel(g, x, y, w, title, idFn, pctFn, qtyFn, subFn) {
+  el('rect', { x, y:y - 20, width:w, height:84, rx:4, fill:'#e9ebed', stroke:'#9aa0a6' }, g);
+  tx(g, x + 12, y, title, 'grp-t', 'start');
+  const idT = tx(g, x + w - 12, y, '', 'lbl', 'end');
+  el('rect', { x:x + 12, y:y + 12, width:w - 24, height:12, class:'bar-track' }, g);
+  const fill = el('rect', { x:x + 12, y:y + 12, height:12, fill:'#5b6168' }, g);
+  const qty = tx(g, x + w - 12, y + 42, '', 'vt', 'end');
+  const sub = tx(g, x + 12, y + 42, '', 'sub', 'start');
+  U.push(() => {
+    idT.textContent = idFn(); sub.textContent = subFn();
+    const p = pctFn(); fill.setAttribute('width', Math.max(0, Math.min(1, (p || 0) / 100)) * (w - 24));
+    qty.textContent = qtyFn() + (p == null ? '' : ` · ${fmt(p, 0)} %`);
+  });
+}
+
+/* =====================================================================================
+   Plant layout  (viewBox 2300 x 1160)
+   Raw materials | Production area (batch) | Packaging area (continuous)
+   Utilities & CIP along the bottom, feeding up into the areas they serve.
+   ===================================================================================== */
+function build() {
+  const pctOf = (t, full) => () => { const v = num(t); return v == null ? null : v / full * 100; };
+  const kw = t => fmt(num(t), 1) + ' kW';
+
+  /* ---------------- zones ---------------- */
+  zone(16, 16, 384, 864, 'RAW MATERIALS', 'Area 100', false, () => [['Power', kw('PM_RM_kW')]]);
+  zone(416, 16, 1036, 864, 'PRODUCTION AREA', 'Line 1 · Areas 200–450 · batch', true, () => [
+    ['Batch line', raw('BATCH_LINE_STATE') || '—'],
+    ['Phase', raw('BATCH_LINE_CURRENT_PHASE') || '—'],
+    ['OEE', fmt(num('BATCH_LINE_OEE_OVERALL'), 0) + ' %'],
+    ['Batches today', fmt(num('BATCHES_TODAY'), 0)],
+    ['Power', kw('PM_PL1_kW')]]);
+  zone(1468, 16, 816, 864, 'PACKAGING AREA', 'Line 1 · Areas 500–600 · continuous', true, () => [
+    ['Pack line', raw('PACK_LINE_OP_STATE_TXT') || '—'],
+    ['Speed', `${fmt(num('PACK_LINE_SPEED'), 0)} / ${fmt(num('PACK_LINE_TARGET_SPEED'), 0)} bpm`],
+    ['OEE', fmt(num('PACK_LINE_OEE_OVERALL'), 0) + ' %'],
+    ['Power', kw('PM_PKG1_kW')]]);
+  zone(16, 896, 2268, 248, 'UTILITIES & CIP', 'Areas 700–800 · electrical', false, () => [
+    ['Steam', fmt(num('STM_HDR_PRESS'), 2) + ' bar'],
+    ['Cooling water', fmt(num('CW_SUP_TEMP'), 1) + ' °C'],
+    ['Instrument air', fmt(num('COMP_AIR_PRESS'), 2) + ' bar'],
+    ['Power', kw('PM_UTIL_kW')]]);
+
+  // Title bands open the line-level tag groups.
+  const batchLine = bandObj('BATCH-LINE', 416, 16, 1036, 66, 'Batch line', ['BatchLine', 'BatchControl'], 'Production', 1432, 30);
+  const packLine = bandObj('PACK-LINE', 1468, 16, 816, 66, 'Packaging line', ['PackLine'], 'Packaging', 2264, 30);
+
+  /* ---------------- RAW MATERIALS: dry ingredients (top) ---------------- */
+  tx(L.obj, 36, 96, 'DRY INGREDIENTS', 'grp-t', 'start');
+  const dry = [
+    { id:'SI-101', name:'Sugar silo', x:32, wt:'SUGAR_BIN_WT', full:8500, fdr:'SUGAR', folder:'Area100_RawMaterials/SugarSilo', d:0 },
+    { id:'BN-101', name:'Salt bin', x:122, wt:'SALT_BIN_WT', full:2200, fdr:'SALT', folder:'Area100_RawMaterials/SaltBin', d:0 },
+    { id:'SPICE', name:'Spice hopper', x:212, wt:'SPICE_BIN_WT', full:450, fdr:'SPICE', folder:'Area100_RawMaterials/SpiceHopper', d:1 },
+  ];
+  for (const s of dry) {
+    // Full scale is the refill quantity the raw-materials controller restocks to.
+    const g = obj(s.id, { name:s.name, area:'Raw Materials', folders:[s.folder], filter:new RegExp('^' + s.fdr + '_BIN'), ax:s.x + 78, ay:126 });
+    vt(g, s.x + 35, 118, { tag:s.wt, d:s.d, anchor:'middle' });
+    vessel(g, { x:s.x, y:126, w:70, h:128, cone:30, pct:pctOf(s.wt, s.full) });
+    tx(g, s.x + 35, 270, s.id, 'lbl'); tx(g, s.x + 35, 284, s.name, 'sub');
+    const f = obj(s.fdr + '-FDR', { name:s.name.split(' ')[0] + ' feeder', area:'Raw Materials', folders:[s.folder], filter:new RegExp('^' + s.fdr + '_FEEDER'), ax:s.x + 80, ay:296 });
+    feeder(f, s.x + 2, 296, 50, () => on(s.fdr + '_FEEDER_RUN'));
+  }
+  for (const s of dry) pipe(`M${s.x + 27},312 V338`, 'dry', () => on(s.fdr + '_FEEDER_RUN'));
+  pipe('M59,338 H445 V156 H548 V184', 'dry', () => dry.some(s => on(s.fdr + '_FEEDER_RUN')), { end:true });
+  pipeLabel(62, 356, 'DRY INGREDIENTS → MX-201');
+
+  /* ---------------- RAW MATERIALS: liquids (bottom) ---------------- */
+  tx(L.obj, 36, 404, 'LIQUID INGREDIENTS', 'grp-t', 'start');
+  const tank = (id, name, x, folder, filter, lvl, temp) => {
+    const g = obj(id, { name, area:'Raw Materials', folders:[folder], filter, ax:x + 78, ay:440 });
+    vt(g, x + 35, 434, { tag:lvl, anchor:'middle' });
+    vessel(g, { x, y:442, w:70, h:150, pct:() => num(lvl) });
+    tx(g, x + 35, 610, id, 'lbl'); tx(g, x + 35, 624, name, 'sub');
+    vt(g, x + 35, 642, { tag:temp, anchor:'middle' });
+  };
+  tank('TK-101', 'Paste tank 1', 32, 'Area100_RawMaterials/PasteTank1', /^PASTE_TK1/, 'PASTE_TK1_LVL', 'PASTE_TK1_TEMP');
+  tank('TK-102', 'Paste tank 2', 122, 'Area100_RawMaterials/PasteTank2', /^PASTE_TK2/, 'PASTE_TK2_LVL', 'PASTE_TK2_TEMP');
+  tank('TK-103', 'Vinegar tank', 212, 'Area100_RawMaterials/VinegarTank', /^VIN_TK/, 'VIN_TK_LVL', 'VIN_TK_TEMP');
+
+  const ws = obj('WS-101', { name:'Water supply', area:'Raw Materials', folders:['Area100_RawMaterials/WaterSupply'], filter:/^H2O_(?!VLV)/, ax:376, ay:446 });
+  el('rect', { x:306, y:450, width:64, height:92, rx:4, class:'eq' }, ws);
+  tx(ws, 338, 474, 'H₂O', 'eq-glyph');
+  vt(ws, 338, 500, { tag:'H2O_PRESS', d:1, anchor:'middle' });
+  vt(ws, 338, 522, { tag:'H2O_TEMP', d:0, anchor:'middle' });
+  tx(ws, 338, 610, 'WS-101', 'lbl'); tx(ws, 338, 624, 'Water', 'sub');
+
+  const p101 = obj('P-101', { name:'Paste pump 1', area:'Raw Materials', folders:['Area100_RawMaterials/PasteTank1'], filter:/^P101/, ax:112, ay:668 });
+  pump(p101, 112, 690, () => on('P101_STS')); tx(p101, 96, 694, 'P-101', 'sub', 'end');
+  const p102 = obj('P-102', { name:'Paste pump 2', area:'Raw Materials', folders:['Area100_RawMaterials/PasteTank2'], filter:/^P102/, ax:202, ay:668 });
+  pump(p102, 202, 690, () => on('P102_STS')); tx(p102, 186, 694, 'P-102', 'sub', 'end');
+  const vv = obj('XV-VIN', { name:'Vinegar outlet valve', area:'Raw Materials', folders:['Area100_RawMaterials/VinegarTank'], filter:/^VIN_VLV/, ax:292, ay:670 });
+  valve(vv, 292, 690, () => on('VIN_VLV_STS'), true); tx(vv, 280, 694, 'XV-VIN', 'sub', 'end');
+  const wv = obj('XV-H2O', { name:'Water supply valve', area:'Raw Materials', folders:['Area100_RawMaterials/WaterSupply'], filter:/^H2O_VLV/, ax:384, ay:670 });
+  valve(wv, 384, 690, () => on('H2O_VLV_STS'), true); tx(wv, 372, 694, 'XV-H2O', 'sub', 'end');
+
+  // Liquid lines run to the pre-mixer inlet manifold. Each header is lit by the pre-mixer inlet
+  // valve that admits it (XV-201/202/203) -- the raw-materials supply flow tags are not written.
+  const paste = () => on('XV-202'), vinegar = () => on('XV-203'), water = () => on('XV-201');
+  pipe('M102,578 H112 V678', 'product', () => on('P101_STS'));
+  pipe('M192,578 H202 V678', 'product', () => on('P102_STS'));
+  pipe('M124,690 H130 V800 H220', 'product', () => on('P101_STS'));
+  pipe('M214,690 H220 V800', 'product', () => on('P102_STS'));
+  pipe('M220,800 H485 V340 H495', 'product', paste);
+  pipe('M282,578 H292 V682 M292,698 V770 H470 V310 H495', 'product', vinegar);
+  pipe('M370,520 H384 V682 M384,698 V740 H455 V280 H467 M483,280 H495', 'product', water);
+  pipeLabel(236, 794, 'PASTE'); pipeLabel(304, 764, 'VINEGAR'); pipeLabel(398, 758, 'WATER');
+
+  /* ---------------- PRODUCTION: pre-mix MX-201 ---------------- */
+  for (const [id, y, name] of [['XV-201', 280, 'Water inlet valve'], ['XV-203', 310, 'Vinegar inlet valve'], ['XV-202', 340, 'Paste inlet valve']]) {
+    const g = obj(id, { name, area:'Production', folders:['Area200_PreMix/Valves'], filter:new RegExp('^' + id + '$'), ax:503, ay:y - 15 });
+    valve(g, 503, y, () => on(id));
+    pipe(`M511,${y} H520`, 'product', () => on(id));
+  }
+  const fcv = obj('FCV-201', { name:'Water flow control valve', area:'Production', folders:['Area200_PreMix/Valves'], filter:/^FCV-201$/, ax:492, ay:240 });
+  valve(fcv, 475, 280, () => (num('FCV-201') || 0) > 1, false, true);
+  tx(fcv, 476, 232, 'FCV-201', 'sub');
+  vt(fcv, 476, 248, { tag:'FCV-201', d:0, anchor:'middle' });
+
+  const mx = obj('MX-201', { name:'Pre-mixer', area:'Production', folders:['Area200_PreMix/Mixer_MX201'], filter:/^(?!AGIT)/, ax:650, ay:200 });
+  vt(mx, 580, 126, { tag:'LIT-201_PCT', anchor:'middle' });
+  vessel(mx, { x:520, y:190, w:120, h:180, pct:() => num('LIT-201_PCT') });
+  tx(mx, 520, 404, 'MX-201', 'lbl', 'start'); tx(mx, 520, 418, 'Pre-mixer', 'sub', 'start');
+  st(mx, 520, 434, () => [MX_STATE[num('MX201_STATE')] || '—', ''], 'start');
+  vt(mx, 520, 456, { tag:'TIT-201', lab:'TI' });
+  vt(mx, 520, 474, { tag:'WIT-201', lab:'WI', d:0 });
+  vt(mx, 520, 492, { tag:'FIT-201', lab:'FI', d:0 });
+  const ag2 = obj('AG-201', { name:'Pre-mixer agitator', area:'Production', folders:['Area200_PreMix/Mixer_MX201'], filter:/^AGIT201/, ax:604, ay:150 });
+  agitator(ag2, 580, 190, 120, () => on('AGIT201_RUN'));
+  vt(ag2, 596, 172, { tag:'AGIT201_SPD', d:0 });
+
+  const xv204 = obj('XV-204', { name:'Pre-mixer discharge valve', area:'Production', folders:['Area200_PreMix/Valves'], filter:/^XV-204$/, ax:680, ay:334 });
+  valve(xv204, 664, 350, () => on('XV-204'));
+  pipe('M640,350 H656 M672,350 H754', 'product', () => on('XV-204'), { end:true });
+  tx(xv204, 664, 376, 'XV-204', 'sub');
+
+  const tic201 = obj('TIC-201', { name:'Pre-mix temperature controller', area:'Production', folders:['Area200_PreMix/PID'], ax:646, ay:520 });
+  pidBlock(tic201, 520, 530, 'TIC-201', 'PID_201');
+
+  /* ---------------- PRODUCTION: cooking KT-301 ---------------- */
+  const kt = obj('KT-301', { name:'Cook kettle', area:'Production', folders:['Area300_Cooking/Kettle_KT301'], filter:/^(?!AGIT)/, ax:1012, ay:120 });
+  vt(kt, 830, 126, { tag:'LIT-301_PCT', anchor:'middle' });
+  vessel(kt, { x:760, y:190, w:140, h:180, jacket:true, pct:() => num('LIT-301_PCT') });
+  tx(kt, 846, 414, 'KT-301', 'lbl', 'start'); tx(kt, 846, 428, 'Cook kettle', 'sub', 'start');
+  st(kt, 846, 444, () => [KT_STATE[num('KT301_STATE')] || '—', ''], 'start');
+  vt(kt, 914, 226, { tag:'TIT-301', lab:'TI' });
+  hbar(kt, 914, 234, 64, { tag:'TIT-301', min:0, max:120, lo:85, hi:95, when:() => num('KT301_STATE') === 3 });
+  vt(kt, 914, 270, { tag:'AIT-301', lab:'pH', d:2 });
+  vt(kt, 914, 290, { tag:'PIT-301', lab:'PI', d:2 });
+  vt(kt, 914, 310, { tag:'KT301_HOLD_TMR', lab:'Hold', d:0 });
+  const ag3 = obj('AG-301', { name:'Kettle agitator', area:'Production', folders:['Area300_Cooking/Kettle_KT301'], filter:/^AGIT301/, ax:854, ay:150 });
+  agitator(ag3, 830, 190, 120, () => on('AGIT301_RUN'));
+  vt(ag3, 846, 172, { tag:'AGIT301_SPD', d:0 });
+
+  // steam to the kettle jacket
+  const sv = obj('SV-301', { name:'Steam isolation valve', area:'Production', folders:['Area300_Cooking/SteamControl'], filter:/^SV301$/, ax:722, ay:690 });
+  valve(sv, 745, 700, () => on('SV301'), true); tx(sv, 732, 704, 'SV-301', 'sub', 'end');
+  const tcv = obj('TCV-301', { name:'Steam temperature control valve', area:'Production', folders:['Area300_Cooking/SteamControl'], filter:/^(TCV-301|FIT-302)$/, ax:722, ay:606 });
+  valve(tcv, 745, 630, () => (num('TCV-301') || 0) > 1, true, true);
+  vt(tcv, 732, 634, { tag:'TCV-301', d:0, lab:'TCV-301', anchor:'end' });
+  vt(tcv, 732, 652, { tag:'FIT-302', d:0, lab:'FI', anchor:'end' });
+  const tic301 = obj('TIC-301', { name:'Cook temperature controller', area:'Production', folders:['Area300_Cooking/PID'], ax:910, ay:560 });
+  pidBlock(tic301, 790, 574, 'TIC-301', 'PID_301', true);
+  const steamOn = () => on('SV301') && (num('FIT-302') || 0) > 1;
+  pipe('M745,930 V708 M745,692 V638 M745,622 V362 H750', 'steam', steamOn, { end:true });
+  pipeLabel(752, 864, 'STEAM FROM B-801');
+
+  // kettle -> deaerator
+  pipe('M830,376 V470 H974 V330 H984', 'product', () => num('KT301_STATE') === 5 || num('DA401_STATE') === 1, { end:true });
+
+  /* ---------------- PRODUCTION: deaeration + homogenizing ---------------- */
+  const da = obj('DA-401', { name:'Vacuum deaerator', area:'Production', folders:['Area400_Process/Deaerator_DA401'], filter:/^(401-(TI|PI|FI|LI)-|DA401)/, ax:1094, ay:206 });
+  vt(da, 1035, 190, { tag:'401-LI-001', anchor:'middle', d:0 });
+  vessel(da, { x:990, y:200, w:90, h:170, pct:pctOf('401-LI-001', 2500) });
+  tx(da, 990, 530, 'DA-401', 'lbl', 'start'); tx(da, 990, 544, 'Vacuum deaerator', 'sub', 'start');
+  st(da, 990, 560, () => [DA_STATE[num('DA401_STATE')] || '—', ''], 'start');
+  vt(da, 990, 580, { tag:'401-PI-001', lab:'PI', d:0 });
+  vt(da, 990, 598, { tag:'401-TI-001', lab:'TI' });
+  vt(da, 990, 616, { tag:'401-FI-001', lab:'FI', d:0 });
+  const vp = obj('VP-401', { name:'Vacuum pump', area:'Production', folders:['Area400_Process/Deaerator_DA401'], filter:/^401-VP-001/, ax:976, ay:136 });
+  pipe('M1035,200 V156 H972', 'cw', () => on('401-VP-001_RUN'));
+  pump(vp, 960, 156, () => on('401-VP-001_RUN')); tx(vp, 942, 160, 'VP-401', 'sub', 'end');
+  const tp = obj('P-401', { name:'Transfer pump', area:'Production', folders:['Area400_Process/Deaerator_DA401'], filter:/^401-P-001/, ax:1018, ay:476 });
+  pipe('M1035,370 V440', 'product', () => on('401-P-001_STS'));
+  pump(tp, 1035, 452, () => on('401-P-001_STS')); tx(tp, 1017, 456, 'P-401', 'sub', 'end');
+
+  const hg = obj('HG-401', { name:'Homogenizer', area:'Production', folders:['Area400_Process/Homogenizer_HG401'], ax:1168, ay:420 });
+  pipe('M1047,452 H1082', 'product', () => on('401-P-001_STS'), { end:true });
+  box(hg, 1088, 432, 72, 40, 'HOMOG', () => on('HOMOG_401_RUN'));
+  tx(hg, 1100, 494, 'HG-401', 'lbl', 'start'); st(hg, 1100, 510, packml('HOMOG_401'), 'start');
+  vt(hg, 1100, 530, { tag:'HOMOG_401_PRESS', lab:'1st', d:0 });
+  vt(hg, 1100, 548, { tag:'HOMOG_401_PRESS2', lab:'2nd', d:0 });
+
+  /* ---------------- PRODUCTION: buffer tanks (batch -> continuous) ---------------- */
+  const toBuffer = () => ['BT451', 'BT452', 'BT453'].some(b => on(b + '_VLV_IN'));
+  pipe('M1160,452 H1180 V160 H1388', 'product', toBuffer);
+  for (const [id, t, x] of [['BT-451', 'BT451', 1210], ['BT-452', 'BT452', 1290], ['BT-453', 'BT453', 1370]]) {
+    const cx = x + 32;
+    const g = obj(id, { name:'Buffer tank ' + id.slice(-1), area:'Production', folders:['Area450_Buffer/' + t], ax:x + 70, ay:226 });
+    pipe(`M${cx - 14},160 V174 M${cx - 14},190 V208`, 'product', () => on(t + '_VLV_IN'), { end:true });
+    valve(g, cx - 14, 182, () => on(t + '_VLV_IN'), true);
+    vessel(g, { x, y:214, w:64, h:176, pct:() => num(t + '_LVL') });
+    agitator(g, cx + 12, 214, 120, () => on(t + '_AGIT_RUN'));
+    valve(g, cx, 414, () => on(t + '_VLV_OUT'), true);
+    pipe(`M${cx},390 V406 M${cx},422 V440`, 'product', () => on(t + '_VLV_OUT'));
+    tx(g, cx, 470, id, 'lbl');
+    vt(g, cx, 488, { tag:t + '_LVL', anchor:'middle', d:0 });
+    vt(g, cx, 506, { tag:t + '_TEMP', anchor:'middle', d:0 });
+    hbar(g, x + 4, 512, 56, { tag:t + '_TEMP', min:60, max:100, lo:82, hi:95, when:() => (num(t + '_LVL') || 0) > 5 && num(t + '_STATE') !== 1 });
+    st(g, cx, 542, () => { const s = num(t + '_STATE'); return [BT_STATE[s] || '—', s === 4 ? 'flt' : '']; });
+    vt(g, cx, 560, { fn:() => { const m = num(t + '_HOLD_MIN'); return m ? fmt(m, 0) + ' min' : '—'; }, anchor:'middle', u:'' });
+  }
+  const bufGrp = obj('BUF-450', { name:'Buffer area (holding losses)', area:'Production', folders:['Area450_Buffer'], ax:1430, ay:592 });
+  tx(bufGrp, 1322, 604, 'AREA 450 · BUFFER', 'grp-t');
+  tx(bufGrp, 1322, 620, 'batch → continuous decoupling', 'sub');
+  vt(bufGrp, 1322, 640, { tag:'BUFFER_HOLDING_LOSS_KG_SHIFT', lab:'Loss this shift', d:0, anchor:'middle' });
+
+  const toFiller = () => ['BT451', 'BT452', 'BT453'].some(b => on(b + '_VLV_OUT'));
+  pipe('M1242,440 H1490 V300 H1508', 'product', toFiller, { end:true });
+
+  /* ---------------- PRODUCTION: CIP entry + batch progress ---------------- */
+  pipe('M900,930 V812', 'cip', () => on('CIP_P701_RUN'), { end:true });
+  pipe('M930,812 V930', 'cip', () => on('CIP_P701_RUN'), { end:true });
+  pipeLabel(944, 834, 'CIP SUPPLY / RETURN');
+  pipeLabel(944, 850, 'TO MX-201 · KT-301 · DA-401');
+  progressPanel(batchLine, 436, 790, 296, 'BATCH ON LINE', () => raw('CURRENT_BATCH_ID') || '—',
+    () => num('BATCH_LINE_BATCH_YIELD_PCT'),
+    () => `${fmt(num('BATCH_LINE_ORDER_QTY_GOOD'), 0)} / ${fmt(num('BATCH_LINE_ORDER_QTY_TARGET'), 0)} kg`,
+    () => `${raw('BATCH_LINE_WORK_ORDER_ID') || '—'} · ${fmt(num('BATCH_LINE_CYCLE_TIME_ACTUAL_MIN'), 0)} min`);
+
+  /* ---------------- PACKAGING: row A, filler -> cooling tunnel ---------------- */
+  conveyor('M1606,300 H2244 V640 H1530', () => on('CONV_501_RUN'));
+  const cv = obj('CV-501', { name:'Bottle conveyor', area:'Packaging', folders:['Area500_Filling/Conveyor'], ax:2268, ay:420 });
+  el('rect', { x:2232, y:330, width:24, height:280, class:'hit' }, cv);
+  tx(cv, 2224, 470, 'CV-501', 'lbl', 'end'); st(cv, 2224, 486, packml('CONV_501'), 'end');
+  vt(cv, 2224, 504, { tag:'CONV_501_SPD', d:0, anchor:'end' });
+  arrow(1510, 640, 'WAREHOUSE');
+
+  const fl = obj('FL-501', { name:'Rotary piston filler', area:'Packaging', folders:['Area500_Filling/Filler_FL501'], ax:1614, ay:250 });
+  rotary(fl, 1560, 300, 46, 12, 'FILL', () => num('FL_501_STATUS') === 1);
+  tx(fl, 1560, 370, 'FL-501', 'lbl'); st(fl, 1560, 386, packml('FL_501'));
+  vt(fl, 1560, 404, { tag:'FL_501_FILL_SPD', d:0, anchor:'middle' });
+  vt(fl, 1560, 422, { tag:'FL_501_WT_AVG', d:1, anchor:'middle' });
+  vt(fl, 1560, 440, { tag:'FL_501_PROD_TEMP', d:1, anchor:'middle' });
+  hbar(fl, 1520, 446, 80, { tag:'FL_501_PROD_TEMP', min:60, max:100, lo:82, hi:95, when:() => num('FL_501_STATUS') === 1 });
+
+  const cap = obj('CAP-501', { name:'Rotary capper', area:'Packaging', folders:['Area500_Filling/Capper_CAP501'], ax:1718, ay:268 });
+  rotary(cap, 1680, 300, 30, 8, 'CAP', () => num('CAP_501_OP_STATE') === 2);
+  tx(cap, 1680, 350, 'CAP-501', 'lbl'); st(cap, 1680, 366, packml('CAP_501'));
+  vt(cap, 1680, 384, { tag:'CAP_501_TORQUE', d:1, anchor:'middle' });
+
+  const it = obj('IT-501', { name:'Inversion tunnel', area:'Packaging', folders:['Area500_Filling/InversionTunnel'], ax:1888, ay:270 });
+  tunnel(it, 1740, 280, 140, 40, 2, 'INVERSION', () => on('INV_TUNNEL_RUN'));
+  tx(it, 1810, 350, 'IT-501', 'lbl'); st(it, 1810, 366, packml('INV_TUNNEL'));
+  vt(it, 1810, 384, { fn:() => `${fmt(num('INV_TUNNEL_TEMP_1'), 0)} / ${fmt(num('INV_TUNNEL_TEMP_2'), 0)}`, u:'°C', anchor:'middle' });
+
+  const ct = obj('CT-501', { name:'Cooling tunnel', area:'Packaging', folders:['Area500_Filling/CoolingTunnel'], ax:2208, ay:266 });
+  tunnel(ct, 1910, 276, 290, 48, 3, 'COOLING', () => on('COOL_TUN_RUN'));
+  tx(ct, 2055, 350, 'CT-501', 'lbl'); st(ct, 2055, 366, packml('COOL_TUN'));
+  vt(ct, 2055, 384, { fn:() => `${fmt(num('COOL_TUN_TEMP_IN'), 0)} → ${fmt(num('COOL_TUN_TEMP_MID'), 0)} → ${fmt(num('COOL_TUN_TEMP_OUT'), 0)}`, u:'°C', anchor:'middle' });
+  vt(ct, 2055, 402, { tag:'COOL_TUN_SPRAY_FLOW', lab:'Spray', d:0, anchor:'middle' });
+  pipe('M2262,930 V236 H2055 V268', 'cw', () => (num('COOL_TUN_SPRAY_FLOW') || 0) > 1, { end:true });
+  pipeLabel(2070, 228, 'COOLING WATER SPRAY');
+
+  /* ---------------- PACKAGING: row B, labeler -> palletizer (right to left) ---------------- */
+  const m = (id, name, folder, x, w, glyph, pref, extra) => {
+    const g = obj(id, { name, area:'Packaging', folders:[folder], ax:x + w + 4, ay:604 });
+    box(g, x, 614, w, 52, glyph, () => num(pref + '_OP_STATE') === 2);
+    tx(g, x + w / 2, 692, id, 'lbl'); st(g, x + w / 2, 708, packml(pref));
+    extra(g, x + w / 2);
+  };
+  m('LBL-601', 'Labeler', 'Area600_Packaging/Labeler_LBL601', 2110, 80, 'LABEL', 'LBL_601',
+    (g, c) => vt(g, c, 726, { tag:'LBL_601_SPEED', d:0, anchor:'middle' }));
+  m('DC-601', 'Date coder', 'Area600_Packaging/DateCoder_DC601', 2004, 70, 'CODE', 'DC_601',
+    (g, c) => vt(g, c, 726, { tag:'DC_601_PRINT_CNT', d:0, anchor:'middle', u:'prints' }));
+  m('XR-601', 'X-ray & metal detector', 'Area600_Packaging/Inspector_XR601', 1874, 96, 'X-RAY · MD', 'XRAY_601',
+    (g, c) => { vt(g, c, 726, { fn:() => `${fmt(num('XRAY_601_REJECT'), 0)} / ${fmt(num('XRAY_601_TOTAL'), 0)}`, u:'rejected', anchor:'middle' });
+                vt(g, c, 744, { tag:'MD_601_CNT', lab:'MD trips', d:0, anchor:'middle', u:'' }); });
+  m('CP-601', 'Case packer', 'Area600_Packaging/CasePacker_CP601', 1736, 104, 'CASE PACK', 'CP_601',
+    (g, c) => { vt(g, c, 726, { tag:'CP_601_SPEED', d:1, anchor:'middle' });
+                vt(g, c, 744, { tag:'CP_601_CASES_CNT', lab:'cases', d:0, anchor:'middle', u:'' }); });
+  m('PAL-601', 'Palletizer', 'Area600_Packaging/Palletizer_PAL601', 1566, 120, 'PALLETIZE', 'PAL_601',
+    (g, c) => { vt(g, c, 726, { tag:'PAL_601_LAYERS', lab:'layer', d:0, anchor:'middle', u:'of 5' });
+                vt(g, c, 744, { tag:'PAL_601_PALLETS_CNT', lab:'pallets', d:0, anchor:'middle', u:'' }); });
+
+  progressPanel(packLine, 1492, 800, 540, 'PACKAGING ORDER', () => raw('PACK_ORD_ID') || 'no order',
+    () => num('PACK_ORD_PROGRESS_PCT'),
+    () => `${fmt(num('PACK_ORD_CASES_DONE'), 0)} / ${fmt(num('PACK_ORD_TARGET_CASES'), 0)} cases`,
+    () => `SKU ${raw('PACK_ORD_SKU') || '—'} · ${fmt(num('PACK_ORD_PALLETS_DONE'), 0)} pallets · first-pass yield ${fmt(num('PACK_LINE_FIRST_PASS_YIELD'), 1)} %`);
+
+  /* ---------------- UTILITIES & CIP ---------------- */
+  tx(L.obj, 40, 966, 'ELECTRICAL FEEDERS', 'grp-t', 'start');
+  tx(L.obj, 300, 966, 'kW', 'grp-t', 'end'); tx(L.obj, 384, 966, 'PF', 'grp-t', 'end'); tx(L.obj, 444, 966, 'A', 'grp-t', 'end');
+  [['PM-RM', 'Raw materials'], ['PM-PL1', 'Production line 1'], ['PM-PKG1', 'Packaging line 1'], ['PM-UTIL', 'Utilities'], ['PM-CIP', 'CIP']]
+    .forEach(([id, name], i) => {
+      const pre = id.replace('-', '_'), y = 990 + i * 28;
+      const g = obj(id, { name:name + ' power meter', area:'Utilities', folders:['PowerMetering/' + id], ax:462, ay:y - 5 });
+      el('rect', { x:34, y:y - 17, width:416, height:24, class:'hit' }, g);
+      tx(g, 40, y, id, 'lbl', 'start'); tx(g, 116, y, name, 'sub', 'start');
+      vt(g, 300, y, { tag:pre + '_kW', d:1, anchor:'end', u:'' });
+      vt(g, 384, y, { tag:pre + '_PF', d:2, anchor:'end', u:'' });
+      vt(g, 444, y, { tag:pre + '_I_Avg', d:0, anchor:'end', u:'' });
+    });
+
+  const b = obj('B-801', { name:'Steam boiler', area:'Utilities', folders:['Area800_Utilities/Steam'], ax:760, ay:976 });
+  const bo = el('rect', { x:620, y:990, width:130, height:58, rx:26, class:'eq' }, b);
+  const bg = tx(b, 685, 1023, 'BOILER', 'eq-glyph');
+  U.push(() => { const r = num('BOILER_STS') === 1; bo.classList.toggle('on', r); bg.classList.toggle('on-glyph', r); });
+  pipe('M685,990 V930 H745', 'steam', () => (num('STM_FLOW') || 0) > 1);
+  tx(b, 620, 1068, 'B-801', 'lbl', 'start');
+  vt(b, 676, 1068, { tag:'STM_HDR_PRESS', lab:'Header', d:2 });
+  hbar(b, 620, 1076, 130, { tag:'STM_HDR_PRESS', min:0, max:10, lo:5.5, hi:7 });
+  vt(b, 620, 1112, { tag:'STM_FLOW', lab:'Flow', d:0 });
+  vt(b, 620, 1130, { tag:'BOILER_EFF', lab:'Eff', d:0 });
+
+  const cip = obj('CIP-701', { name:'CIP circuit 1', area:'Utilities', folders:['Area700_CIP/Circuit1'], ax:1010, ay:962 });
+  vessel(cip, { x:836, y:972, w:50, h:84, pct:() => on('CIP_ACTIVE') ? 60 : 12 });
+  pipe('M886,1040 H908', 'cip', () => on('CIP_P701_RUN'));
+  pump(cip, 920, 1040, () => on('CIP_P701_RUN'));
+  pipe('M932,1040 H950 V950 H900', 'cip', () => on('CIP_P701_RUN'));
+  tx(cip, 836, 1080, 'CIP-701', 'lbl', 'start');
+  st(cip, 836, 1096, () => [CIP_STEP[num('CIP_STEP')] || '—', ''], 'start');
+  vt(cip, 836, 1114, { tag:'CIP_TIT_701', lab:'TI', d:0 });
+  vt(cip, 918, 1114, { tag:'CIP_CIT_701', lab:'CI', d:0 });
+  vt(cip, 836, 1132, { tag:'CIP_FIT_701', lab:'FI', d:0 });
+
+  const hw = obj('HX-801', { name:'Hot water system', area:'Utilities', folders:['Area800_Utilities/HotWater'], ax:1134, ay:976 });
+  hx(hw, 1100, 1004, 22, () => num('HW_PUMP_STS') === 1);
+  pipe('M1078,1004 H892', 'hw', () => on('CIP_ACTIVE'), { end:true });
+  pipeLabel(960, 998, 'HOT WATER');
+  tx(hw, 1100, 1048, 'HX-801', 'lbl'); tx(hw, 1100, 1062, 'Hot water', 'sub');
+  vt(hw, 1100, 1082, { tag:'HW_SUP_TEMP', anchor:'middle', d:0 });
+
+  const ac = obj('AC-801', { name:'Air compressor', area:'Utilities', folders:['Area800_Utilities/CompressedAir'], ax:1322, ay:976 });
+  const acb = el('circle', { cx:1290, cy:1004, r:24, class:'eq' }, ac);
+  const acg = tx(ac, 1290, 1008, 'AIR', 'eq-glyph');
+  U.push(() => { const r = on('COMP_RUN'); acb.classList.toggle('on', r); acg.classList.toggle('on-glyph', r); });
+  tx(ac, 1290, 1048, 'AC-801', 'lbl'); tx(ac, 1290, 1062, 'Instrument air', 'sub');
+  vt(ac, 1236, 1084, { tag:'COMP_AIR_PRESS', d:2 });
+  hbar(ac, 1236, 1090, 110, { tag:'COMP_AIR_PRESS', min:0, max:8, lo:6, hi:7 });
+  vt(ac, 1236, 1126, { tag:'COMP_AIR_DEW', lab:'Dew point', d:0 });
+
+  const ps = obj('PLANT', { name:'Plant status', area:'Plant', folders:['PlantStatus'], ax:1712, ay:962 });
+  el('rect', { x:1460, y:952, width:260, height:180, class:'hit' }, ps);
+  tx(ps, 1470, 972, 'PLANT TODAY', 'grp-t', 'start');
+  vt(ps, 1470, 996, { tag:'BATCHES_TODAY', lab:'Batches', d:0, u:'' });
+  vt(ps, 1470, 1016, { tag:'BOTTLES_TODAY', lab:'Bottles', d:0, u:'' });
+  vt(ps, 1470, 1036, { tag:'CASES_TODAY', lab:'Cases', d:0, u:'' });
+  vt(ps, 1470, 1056, { tag:'PALLETS_TODAY', lab:'Pallets', d:0, u:'' });
+  vt(ps, 1470, 1080, { tag:'PACK_LINE_MICROSTOPS_TODAY', lab:'Micro-stops', d:0, u:'' });
+  vt(ps, 1470, 1100, { tag:'PACK_LINE_MAJOR_STOPS_TODAY', lab:'Major stops', d:0, u:'' });
+  vt(ps, 1470, 1120, { tag:'PACK_LINE_CHANGEOVERS_TODAY', lab:'Changeovers', d:0, u:'' });
+
+  const cwt = obj('CT-801', { name:'Cooling tower', area:'Utilities', folders:['Area800_Utilities/CoolingWater'], filter:/^CW_(SUP|RET|FLOW|BASIN|COND|DEMAND)/, ax:2030, ay:972 });
+  el('path', { d:'M1880,1070 L1900,990 H2000 L2020,1070 Z', class:'eq' }, cwt);
+  tx(cwt, 1950, 1040, 'CT-801', 'eq-glyph');
+  vessel(cwt, { x:1876, y:1074, w:148, h:24, pct:() => num('CW_BASIN_LVL') });
+  tx(cwt, 1950, 1120, 'Cooling tower', 'sub');
+  vt(cwt, 2040, 1010, { tag:'CW_SUP_TEMP', lab:'Supply' });
+  hbar(cwt, 2040, 1016, 110, { tag:'CW_SUP_TEMP', min:0, max:20, lo:6, hi:12 });
+  vt(cwt, 2040, 1050, { tag:'CW_RET_TEMP', lab:'Return' });
+  vt(cwt, 2040, 1068, { tag:'CW_FLOW', lab:'Flow' });
+  for (const [id, n, x] of [['FAN-1', 1, 1928], ['FAN-2', 2, 1972]]) {
+    const g = obj(id, { name:`Cooling tower fan ${n}`, area:'Utilities', folders:['Area800_Utilities/CoolingWater'], filter:new RegExp(`^CW_(TOWER_FAN${n}|FAN${n}_)`), ax:x + 10, ay:958 });
+    fan(g, x, 974, () => on(`CW_TOWER_FAN${n}`));
+  }
+  for (const [id, n, x] of [['CWP-1', 1, 2180], ['CWP-2', 2, 2222]]) {
+    const g = obj(id, { name:`Cooling water pump ${n}`, area:'Utilities', folders:['Area800_Utilities/CoolingWater'], filter:new RegExp(`^CW_PUMP${n}`), ax:x + 14, ay:1086 });
+    pump(g, x, 1100, () => num(`CW_PUMP${n}_STS`) === 1);
+    tx(g, x, 1130, id, 'sub');
+  }
+  pipe('M2024,1100 H2168 M2192,1100 H2210 M2234,1100 H2262 V930', 'cw', () => num('CW_PUMP1_STS') === 1 || num('CW_PUMP2_STS') === 1);
+  pipeLabel(2050, 1092, 'CW SUPPLY');
+}
+
+/* =====================================================================================
+   Abnormal conditions (derived from tag values)
+   The simulator publishes raw signals, not an alarm list, so these rules ARE the alarm
+   philosophy: P1 = equipment fault or unplanned stop; P2 = process abnormal, act now;
+   P3 = early warning or maintenance due. Each names the object it is raised against.
+   ===================================================================================== */
+const RULES = [];
+const rule = (p, obj, msg, test) => RULES.push({ p, obj, msg, test });
+function defineRules() {
+  // P1 — faults
+  for (const [o, t] of [
+    ['P-101', 'P101_FAULT'], ['P-102', 'P102_FAULT'], ['SUGAR-FDR', 'SUGAR_FEEDER_FAULT'], ['SALT-FDR', 'SALT_FEEDER_FAULT'],
+    ['AG-201', 'AGIT201_FAULT'], ['AG-301', 'AGIT301_FAULT'], ['VP-401', '401-VP-001_FAULT'], ['P-401', '401-P-001_FAULT'],
+    ['HG-401', 'HOMOG_401_FAULT'], ['BT-451', 'BT451_AGIT_FAULT'], ['BT-452', 'BT452_AGIT_FAULT'], ['BT-453', 'BT453_AGIT_FAULT'],
+    ['FL-501', 'FL_501_FAULT'], ['CV-501', 'CONV_501_FAULT'], ['LBL-601', 'LBL_601_FAULT'], ['CP-601', 'CP_601_FAULT'],
+    ['PAL-601', 'PAL_601_FAULT'], ['CIP-701', 'CIP_P701_FAULT'], ['AC-801', 'COMP_FAULT'], ['CWP-1', 'CW_PUMP1_FAULT'],
+    ['CWP-2', 'CW_PUMP2_FAULT'], ['FAN-1', 'CW_FAN1_FAULT'], ['FAN-2', 'CW_FAN2_FAULT'], ['HX-801', 'HW_PUMP_FAULT']])
+    rule(1, o, () => (o === 'FL-501' ? `Filler down — ${raw('FL_501_FAULT_CODE') || 'fault'}` : o === 'CV-501' ? 'Conveyor jam' : 'Equipment fault')
+                     + (['FL-501', 'CV-501'].includes(o) && num('PACK_LINE_OP_STATE') === 6 ? ' · packaging line stopped' : ''),
+         () => raw(t) === true);
+  // Status 2 is a fault only where the equipment reports its OWN condition. The Area 600
+  // stations' status is derived from the line state, and the capper's from the filler, so on
+  // those a 2 is a consequence of another machine and raising it would flood the banner with
+  // one alarm per station for a single stop. They show it as state text instead.
+  for (const [o, t] of [['P-101', 'P101_STS'], ['P-102', 'P102_STS'], ['B-801', 'BOILER_STS'], ['P-401', '401-P-001_STS'],
+                        ['CWP-1', 'CW_PUMP1_STS'], ['CWP-2', 'CW_PUMP2_STS'], ['HX-801', 'HW_PUMP_STS']])
+    rule(1, o, () => 'Equipment faulted', () => num(t) === 2);
+  rule(1, 'HG-401', () => 'Unplanned downtime', () => num('HOMOG_401_OP_STATE') === 6 && raw('HOMOG_401_FAULT') !== true);
+  // A packaging stop is one event: when a machine's own alarm explains it, that alarm says the
+  // line stopped; the line raises its own alarm only when no machine accounts for the stop.
+  rule(1, 'PACK-LINE', () => `Packaging line down — ${raw('PACK_LINE_STATE_REASON') || 'cause not reported'}`,
+       () => num('PACK_LINE_OP_STATE') === 6 && !packStopExplained());
+
+  // P2 — process abnormal
+  rule(2, 'CAP-501', () => 'Cap feeder jam', () => raw('CAP_501_JAM') === true);
+  rule(2, 'XR-601', () => 'Metal detector trip', () => raw('MD_601_TRIP') === true);
+  rule(2, 'FL-501', () => `Product below hot-fill temperature (${fmt(num('FL_501_PROD_TEMP'), 1)} °C)`, () => num('FL_501_STATUS') === 3);
+  rule(2, 'PACK-LINE', () => 'Packaging line starved — buffer cannot supply the filler', () => num('PACK_LINE_OP_STATE') === 3);
+  rule(2, 'PACK-LINE', () => 'Packaging line blocked downstream', () => num('PACK_LINE_OP_STATE') === 4);
+  for (const t of ['BT451', 'BT452', 'BT453']) {
+    const o = 'BT-' + t.slice(2);
+    rule(2, o, () => 'Product condemned — disposing to waste', () => num(t + '_STATE') === 4);
+    rule(2, o, () => `Holding below hot-fill temperature (${fmt(num(t + '_TEMP'), 1)} °C)`,
+         () => (num(t + '_LVL') || 0) > 5 && num(t + '_STATE') !== 1 && (num(t + '_TEMP') ?? 99) < 82);
+  }
+  rule(2, 'B-801', () => `Steam header pressure low (${fmt(num('STM_HDR_PRESS'), 2)} bar)`, () => (num('STM_HDR_PRESS') ?? 9) < 5.5);
+  rule(2, 'AC-801', () => `Instrument air pressure low (${fmt(num('COMP_AIR_PRESS'), 2)} bar)`, () => (num('COMP_AIR_PRESS') ?? 9) < 6.0);
+  rule(2, 'FL-501', () => `Filler vibration ${fmt(num('FL_501_VIB'), 2)} mm/s — trips at 3.2`, () => (num('FL_501_VIB') || 0) >= 2.8);
+
+  // P3 — early warning / maintenance
+  rule(3, 'CT-801', () => `Cooling water supply warm (${fmt(num('CW_SUP_TEMP'), 1)} °C)`, () => (num('CW_SUP_TEMP') || 0) > 12);
+  rule(3, 'CT-801', () => `Cooling tower basin low (${fmt(num('CW_BASIN_LVL'), 0)} %)`, () => (num('CW_BASIN_LVL') ?? 100) < 40);
+  // Inventory warnings sit just above the level at which the controller "delivers" a refill.
+  for (const [o, t, lim, u] of [['TK-101', 'PASTE_TK1_LVL', 15, '%'], ['TK-102', 'PASTE_TK2_LVL', 15, '%'], ['TK-103', 'VIN_TK_LVL', 20, '%'],
+                                ['SI-101', 'SUGAR_BIN_WT', 1500, 'kg'], ['BN-101', 'SALT_BIN_WT', 400, 'kg'], ['SPICE', 'SPICE_BIN_WT', 80, 'kg']])
+    rule(3, o, () => `Low inventory (${fmt(num(t), 0)} ${u}) — delivery due`, () => (num(t) ?? 1e9) < lim);
+  for (const [o, t] of [['HG-401', 'HOMOG_401_OIL_QUAL'], ['CP-601', 'CP_601_OIL_QUAL'], ['PAL-601', 'PAL_601_OIL_QUAL'], ['AC-801', 'COMP_OIL_QUAL']])
+    rule(3, o, () => `Oil quality degraded (${fmt(num(t), 0)} %) — oil change due`, () => (num(t) ?? 100) < 60);
+  for (const [o, t] of [['HG-401', 'HOMOG_401_FILTER_DP'], ['CP-601', 'CP_601_FILTER_DP'], ['PAL-601', 'PAL_601_FILTER_DP'], ['AC-801', 'COMP_FILTER_DP']])
+    rule(3, o, () => `Filter ΔP high (${fmt(num(t), 2)} bar) — change filter`, () => (num(t) || 0) > 1.2);
+}
+const packStopExplained = () => raw('FL_501_FAULT') === true || raw('CONV_501_FAULT') === true || raw('CAP_501_JAM') === true;
+/* Vibration comes from the condition-monitoring model, which knows each asset's healthy
+   baseline; a single mm/s limit would be wrong for most assets. */
+function vibrationConditions() {
+  const out = [];
+  for (const a of Object.values(S.vib)) {
+    const o = objForTag(a.vibrationTag); if (!o) continue;
+    const msg = `Vibration ${fmt(a.vibration, 2)} mm/s — ×${fmt(a.factor, 1)} healthy` + (a.anomaly ? ' (injected fault)' : '');
+    if (a.factor >= 3) out.push({ p:2, obj:o, key:'vib:' + a.assetId, msg });
+    else if (a.factor >= 1.6) out.push({ p:3, obj:o, key:'vib:' + a.assetId, msg });
+  }
+  return out;
+}
+function evaluateAlarms() {
+  const now = S.plantTime || new Date().toISOString();
+  const active = new Map();
+  RULES.forEach((r, i) => { try { if (r.test()) active.set('r' + i, { p:r.p, obj:r.obj, msg:r.msg() }); } catch { } });
+  for (const c of vibrationConditions()) active.set(c.key, c);
+  for (const k of [...S.alarms.keys()]) if (!active.has(k)) S.alarms.delete(k);
+  for (const [k, a] of active) S.alarms.set(k, { ...a, since:S.alarms.get(k)?.since || now });
+  renderAlarms();
+}
+
+const SHAPE = {
+  1:(x, y) => `M${x - 8},${y - 8} h16 v16 h-16 z`,
+  2:(x, y) => `M${x},${y - 10} l10,10 l-10,10 l-10,-10 z`,
+  3:(x, y) => `M${x - 10},${y - 8} h20 l-10,17 z`,
+};
+const PCOL = { 1:'#d12a1c', 2:'#ef8a00', 3:'#e4c100' };
+function marker(x, y, p, parent) {
+  const g = el('g', { class:'amk p' + p }, parent);
+  el('path', { d:SHAPE[p](x, y), fill:PCOL[p], stroke:'#222', 'stroke-width':1 }, g);
+  tx(g, x, y + (p === 3 ? 1 : 4), String(p), '');
+}
+function markerSvg(p) {
+  return `<svg width="20" height="20" viewBox="-11 -11 22 22" role="img" aria-label="priority ${p}"><path d="${SHAPE[p](0, 0)}" fill="${PCOL[p]}" stroke="#222"/>`
+       + `<text x="0" y="${p === 3 ? 1 : 4}" text-anchor="middle" font-size="11" font-weight="800" fill="${p === 1 ? '#fff' : '#111'}">${p}</text></svg>`;
+}
+function renderAlarms() {
+  L.alm.textContent = '';
+  const best = {};
+  for (const a of S.alarms.values()) if (!best[a.obj] || a.p < best[a.obj]) best[a.obj] = a.p;
+  for (const [o, p] of Object.entries(best)) { const d = OBJ[o]; if (d) marker(d.ax, d.ay, p, L.alm); }
+  for (const o of Object.values(OBJ)) o.g.classList.toggle('alarm', best[o.id] === 1);
+  const list = [...S.alarms.values()].sort((a, b) => a.p - b.p || (b.since > a.since ? 1 : -1));
+  const c = { 1:0, 2:0, 3:0 }; list.forEach(a => c[a.p]++);
+  for (const p of [1, 2, 3]) { const e = $('#c' + p); e.innerHTML = markerSvg(p) + c[p]; e.classList.toggle('zero', !c[p]); }
+  $('#alarms').innerHTML = list.length
+    ? list.map(a => `<div class="row" data-obj="${a.obj}">${markerSvg(a.p)}<span class="t num">${hhmm(a.since)}</span>`
+        + `<span class="o">${a.obj}</span><span>${esc(a.msg)}</span></div>`).join('')
+    : '<div class="none">No abnormal conditions.</div>';
+}
+$('#alarms').addEventListener('click', e => { const r = e.target.closest('.row'); if (r) select(r.dataset.obj); });
+
+/* =====================================================================================
+   Faceplate
+   ===================================================================================== */
+const tagsOf = o => S.catList.filter(t => o.folders.includes(t.folder) && (!o.filter || o.filter.test(t.name)));
+function objForTag(tag) {
+  const t = S.cat[tag]; if (!t) return null;
+  const hits = Object.values(OBJ).filter(o => o.folders.includes(t.folder) && (!o.filter || o.filter.test(tag)));
+  hits.sort((a, b) => (b.filter ? 1 : 0) - (a.filter ? 1 : 0));
+  return hits[0]?.id || null;
+}
+function select(id) {
+  if (!OBJ[id]) return;
+  if (S.sel) OBJ[S.sel]?.g.classList.remove('sel');
+  S.sel = id; OBJ[id].g.classList.add('sel');
+  history.replaceState(null, '', '#' + id);            // deep link: /#FL-501 opens this faceplate
+  renderFaceplate(true);
+}
+function closeFp() {
+  if (S.sel) OBJ[S.sel]?.g.classList.remove('sel');
+  S.sel = null; $('#fp').hidden = true; history.replaceState(null, '', location.pathname);
+}
+$('#fp-x').onclick = closeFp;
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeFp(); });
+
+function renderFaceplate(full) {
+  const o = OBJ[S.sel]; if (!o) return;
+  const tags = tagsOf(o);
+  if (full) {
+    $('#fp').hidden = false;
+    $('#fp-t').textContent = `${o.id} · ${o.name}`;
+    $('#fp-s').textContent = `${o.area} · ${o.folders.join(', ')} · ${tags.length} tags`;
+    const vib = Object.values(S.vib).find(a => tags.some(t => t.name === a.vibrationTag));
+    $('#fp-b').innerHTML = '<div id="fp-ab"></div>'
+      + (vib ? `<h3>Vibration fault injection</h3>
+          <div class="inj" data-asset="${esc(vib.assetId)}">
+            <select class="mode" aria-label="Fault mode"><option>Step</option><option selected>Ramp</option><option>Spike</option></select>
+            <input class="sevr" type="number" value="3" min="1" max="25" step="0.5" aria-label="Severity multiplier" title="Severity × healthy vibration">
+            <input class="dur" type="number" value="0" min="0" step="5" aria-label="Duration in plant minutes" title="Duration, plant minutes (0 = until cleared)">
+            <button class="pri" data-act="inject">Inject</button><button data-act="clear">Clear</button>
+          </div><div class="note" id="fp-vib"></div>` : '')
+      + `<h3>Tags</h3><table><tbody>${tags.map(t => `<tr data-tag="${esc(t.name)}"><td class="d">${esc(t.description || t.name)}`
+          + `<small>${esc(t.name)}${t.writable ? ' · writable' : ''}</small></td><td class="sp"></td><td class="v num"></td></tr>`).join('')}</tbody></table>`;
+  }
+  const ab = [...S.alarms.values()].filter(a => a.obj === o.id).sort((a, b) => a.p - b.p);
+  $('#fp-ab').innerHTML = ab.length ? '<h3>Abnormal conditions</h3>' + ab.map(a => `<div class="ab">${markerSvg(a.p)}<span>${esc(a.msg)}</span></div>`).join('') : '';
+  const box = $('#fp-b .inj');
+  if (box) {
+    const a = S.vib[box.dataset.asset];
+    $('#fp-vib').textContent = a ? `${fmt(a.vibration, 2)} mm/s now · healthy ${fmt(a.healthyVibration, 2)} · bearing ${fmt(a.bearingTemp, 1)} °C`
+      + (a.anomaly ? ` · injected ${a.anomaly.mode} ×${a.anomaly.severity}` : ' · no fault injected') : '';
+  }
+  for (const tr of document.querySelectorAll('#fp-b tr[data-tag]')) {
+    const t = tr.dataset.tag, x = raw(t), u = unitOf(t), def = S.cat[t];
+    const isInt = /^(U?Int|Byte|SByte)/.test(def?.type || '');
+    const code = isInt && typeof x === 'number' ? enumLabel(def, x) : '';
+    tr.children[2].innerHTML = x == null ? '<span style="color:var(--stale)">?</span>'
+      : typeof x === 'number' ? `${fmt(x, isInt ? 0 : Math.abs(x) >= 100 ? 0 : 2)}${code ? ` <small>${esc(code)}</small>` : ''} <small>${esc(u)}</small>`
+      : typeof x === 'boolean' ? (x ? 'TRUE' : 'false') : esc(String(x) || '—');
+    tr.children[1].innerHTML = typeof x === 'number' ? spark(S.hist[t]) : '';
+  }
+}
+$('#fp-b').addEventListener('click', async e => {
+  const b = e.target.closest('button[data-act]'); if (!b) return;
+  const box = b.closest('.inj'), assetId = box.dataset.asset, inject = b.dataset.act === 'inject';
+  const body = inject
+    ? { assetId, mode:box.querySelector('.mode').value, severity:parseFloat(box.querySelector('.sevr').value),
+        rampMinutes:30, durationMinutes:parseFloat(box.querySelector('.dur').value), reason:'injected from SCADA faceplate' }
+    : { assetId };
+  b.disabled = true;
+  try {
+    const r = await fetch(inject ? '/api/vibration/anomaly' : '/api/vibration/anomaly/clear',
+      { method:'POST', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify(body) });
+    if (!r.ok) $('#fp-vib').textContent = 'Request failed: ' + await r.text();
+    await pollVib();
+  } finally { b.disabled = false; }
+});
+/* Coded integers carry their legend in the description, e.g. "(0=Off,1=Run,2=Fault)". */
+const ENUM = {};
+function enumLabel(def, x) {
+  if (!(def.name in ENUM)) {
+    const m = /\((\d+=[^)]*)\)/.exec(def.description || '');
+    ENUM[def.name] = m ? Object.fromEntries(m[1].split(',').map(p => p.split('=').map(s => s.trim())).filter(p => p.length === 2)) : null;
+  }
+  return ENUM[def.name]?.[String(x)] || '';
+}
+function spark(h) {
+  if (!h || h.length < 2) return '';
+  let lo = Math.min(...h), hi = Math.max(...h);
+  if (hi - lo < 1e-9) { hi += 1; lo -= 1; }
+  const pts = h.map((v, i) => `${(i / (HIST_LEN - 1) * 70).toFixed(1)},${(16 - (v - lo) / (hi - lo) * 14).toFixed(1)}`).join(' ');
+  return `<svg width="72" height="18" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="#4d5359" stroke-width="1.2"/></svg>`;
+}
+
+/* =====================================================================================
+   Polling
+   ===================================================================================== */
+async function getJson(url, ms = 2500) {
+  const c = new AbortController(), t = setTimeout(() => c.abort(), ms);
+  try { const r = await fetch(url, { signal:c.signal, cache:'no-store' }); if (!r.ok) throw new Error(r.status); return await r.json(); }
+  finally { clearTimeout(t); }
+}
+async function poll() {
+  try {
+    const d = await getJson('/api/scada/values');
+    S.v = d.values; S.plantTime = d.plantTime; S.lastOk = Date.now();
+    for (const [k, x] of Object.entries(S.v)) if (typeof x === 'number') {
+      const h = S.hist[k] || (S.hist[k] = []); h.push(x); if (h.length > HIST_LEN) h.shift();
+    }
+    for (const f of U) try { f(); } catch (e) { console.warn(e); }
+    for (const p of PIPES) { let a = false; try { a = !!p.active(); } catch { } p.base.classList.toggle('on', a); p.flow.classList.toggle('on', a); }
+    header(); evaluateAlarms();
+    if (S.sel) renderFaceplate(false);
+  } catch { /* comms state is shown by the watchdog */ }
+  if (!poll.loop) { poll.loop = true; setTimeout(function tick() { poll().finally(() => setTimeout(tick, 1000)); }, 1000); }
+}
+async function pollVib() {
+  try { const d = await getJson('/api/vibration/assets'); S.vib = Object.fromEntries((d.assets || []).map(a => [a.assetId, a])); } catch { }
+}
+function header() {
+  $('#h-mode').textContent = raw('PLANT_MODE') || '—';
+  $('#h-shift').textContent = `${raw('SHIFT_NUMBER') ?? '—'} · ${fmt(num('SHIFT_ELAPSED_MIN'), 0)} of ${fmt(num('SHIFT_DURATION_MIN'), 0)} min`;
+  $('#h-time').textContent = S.plantTime ? new Date(S.plantTime).toLocaleString('en-GB', { dateStyle:'medium', timeStyle:'short', timeZone:'UTC' }) : '—';
+  $('#h-speed').textContent = num('SIM_SPEED') != null ? `×${fmt(num('SIM_SPEED'), 0)}` : '—';
+}
+setInterval(() => {                                   // comms watchdog
+  const age = (Date.now() - S.lastOk) / 1000, lost = !S.lastOk || age > 4;
+  const c = $('#comms');
+  c.className = 'pill ' + (lost ? 'lost' : 'live');
+  c.textContent = lost ? (S.lastOk ? `COMMS LOST · frozen ${fmt(age, 0)} s` : 'NO DATA') : 'LIVE';
+  $('#plant').classList.toggle('stale', lost);
+}, 500);
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+const hhmm = iso => { const d = new Date(iso); return isNaN(d) ? '—' : d.toISOString().slice(11, 16); };
+
+/* Every tag must be reachable from an object on the graphic; report any that are not. */
+function coverage() {
+  const covered = new Set();
+  for (const o of Object.values(OBJ)) for (const t of tagsOf(o)) covered.add(t.name);
+  const missing = S.catList.filter(t => !covered.has(t.name));
+  const folders = [...new Set(missing.map(t => t.folder))];
+  const el_ = $('#coverage');
+  el_.textContent = missing.length
+    ? `${missing.length} tags not on graphic: ${folders.join(', ')}`
+    : `${S.catList.length} tags · ${Object.keys(OBJ).length} objects · every tag on the graphic`;
+  el_.style.color = missing.length ? 'var(--p1)' : '';
+  if (missing.length) console.warn('Tags not on graphic', missing.map(t => t.name));
+}
+
+async function start() {
+  $('#lg-alm').innerHTML = `${markerSvg(1)} fault ${markerSvg(2)} abnormal ${markerSvg(3)} warning`;
+  for (;;) {
+    try { const c = await getJson('/api/scada/catalog', 5000); S.catList = c.tags; S.cat = Object.fromEntries(c.tags.map(t => [t.name, t])); break; }
+    catch { $('#comms').textContent = 'waiting for simulator…'; await new Promise(r => setTimeout(r, 2000)); }
+  }
+  build(); defineRules(); coverage();
+  for (const o of Object.values(OBJ)) {          // generous hit area behind each object
+    if (o.g.querySelector(':scope > .hit')) continue;
+    const bb = o.g.getBBox();
+    if (bb.width) o.g.insertBefore(el('rect', { x:bb.x - 6, y:bb.y - 6, width:bb.width + 12, height:bb.height + 12, rx:4, class:'hit' }), o.g.firstChild);
+  }
+  await pollVib(); setInterval(pollVib, 3000);
+  await poll();
+  const deep = decodeURIComponent(location.hash.slice(1));
+  if (OBJ[deep]) select(deep);
+}
+start();
+</script>
+</body>
+</html>

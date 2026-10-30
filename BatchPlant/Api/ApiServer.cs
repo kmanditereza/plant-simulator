@@ -57,6 +57,7 @@ namespace BatchPlant.Api
             app.MapPost("/api/control-recipe", HandleControlRecipe);
             app.MapPost("/api/work-order", HandleWorkOrder);
             MapVibrationEndpoints(app);
+            MapScadaEndpoints(app);
             app.MapGet("/api/status", HandleStatus);
             app.MapGet("/api/recipes", HandleListRecipes);
             app.MapGet("/api/work-order/activated", HandleGetActivated);

@@ -159,7 +159,7 @@ namespace BatchPlant.Process
             tags.Define("PID_201_OP", BuiltInType.Double, pid, "%", "Premix PID Output", 0.0);
 
             // Mixer state
-            tags.Define("MX201_STATE", BuiltInType.Int32, mx, description: "Mixer State (0=Idle,1=Dosing,2=Mixing,3=Discharging,4=Fault)", initialValue: 0);
+            tags.Define("MX201_STATE", BuiltInType.Int32, mx, description: "Mixer State (0=Idle,1=FillingWater,2=DosingPaste,3=DosingVinegar,4=RampingAgitator,5=Mixing,6=RampingDown,7=Discharging)", initialValue: 0);
             tags.Define("MX201_MODE", BuiltInType.Int32, mx, description: "Mixer Mode (0=Manual,1=Auto)", initialValue: 1);
             tags.Define("MX201_BATCH_ID", BuiltInType.String, mx, description: "Batch ID currently in MX-201", initialValue: "");
 
@@ -208,7 +208,7 @@ namespace BatchPlant.Process
             tags.Define("PID_301_MODE", BuiltInType.Int32, pid, description: "Cook PID Mode (0=Manual,1=Auto)", initialValue: 1);
 
             // Kettle state
-            tags.Define("KT301_STATE", BuiltInType.Int32, kt, description: "Kettle State (0=Idle,1=Filling,2=Heating,3=HoldingTemp,4=Discharging,5=Fault)", initialValue: 0);
+            tags.Define("KT301_STATE", BuiltInType.Int32, kt, description: "Kettle State (0=Idle,1=Filling,2=HeatingUp,3=Holding,4=Cooling,5=Discharging)", initialValue: 0);
             tags.Define("KT301_HOLD_TMR", BuiltInType.Double, kt, "sec", "Pasteurization Hold Timer", 0.0);
             tags.Define("KT301_BATCH_ID", BuiltInType.String, kt, description: "Batch ID currently in KT-301", initialValue: "");
 
@@ -231,7 +231,7 @@ namespace BatchPlant.Process
             tags.Define("401-TI-001", BuiltInType.Double, da, "degC", "Deaerator Temperature", 22.0);
             tags.Define("401-PI-001", BuiltInType.Double, da, "mmHg", "Deaerator Vacuum Level", 0.0);
             tags.Define("401-FI-001", BuiltInType.Double, da, "L/min", "Deaerator Product Flow", 0.0);
-            tags.Define("401-LI-001", BuiltInType.Double, da, "%", "Deaerator Level", 0.0);
+            tags.Define("401-LI-001", BuiltInType.Double, da, "L", "Deaerator Level (litres, 2,500 L vessel)", 0.0);
             tags.Define("401-VP-001_RUN", BuiltInType.Boolean, da, description: "Vacuum Pump Running");
             tags.Define("401-VP-001_FAULT", BuiltInType.Boolean, da, description: "Vacuum Pump Fault");
             tags.Define("401-VP-001_AMPS", BuiltInType.Double, da, "A", "Vacuum Pump Current", 0.0);

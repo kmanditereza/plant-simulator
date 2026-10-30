@@ -14,6 +14,12 @@
     <PackageReference Include="OPCFoundation.NetStandard.Opc.Ua" Version="1.5.375.457" />
   </ItemGroup>
 
+  <!-- SCADA overview page, compiled into the assembly so it ships with the DLL (see ApiServer.Scada.cs) -->
+  <ItemGroup>
+    <EmbeddedResource Include="Api\Scada\scada.html" LogicalName="BatchPlant.Scada.html" />
+    <Content Remove="Api\Scada\scada.html" />
+  </ItemGroup>
+
   <ItemGroup>
     <None Update="Config\BatchPlantServer.Config.xml">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
